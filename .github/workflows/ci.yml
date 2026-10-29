@@ -1,74 +1,54 @@
-name: CI
+name: Headless Service CI
 
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  lint:
-    name: Lint
+  backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install Node.js
-        uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@v6
         with:
-          node-version: "22.14"
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v6
+          run_install: false
+      - uses: actions/setup-node@v7
         with:
-          run_install: true
-
-      - name: Cache pnpm store
-        uses: actions/cache@v6
-        with:
-          path: ~/.local/share/pnpm/store
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Build common package
-        run: pnpm --filter @ocs-desktop/common build
-
-      - name: Run lint
-        run: pnpm lint
-
-  typecheck:
-    name: Type Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "22.14"
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          run_install: true
-
-      - name: Cache pnpm store
-        uses: actions/cache@v6
-        with:
-          path: ~/.local/share/pnpm/store
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Build common package
-        run: pnpm --filter @ocs-desktop/common build
-
+          node-version: '22'
+          cache: pnpm
+      - name: Install headless workspace
+        run: pnpm install --frozen-lockfile
+      - name: Build backend
+        run: pnpm build
+      - name: Build web console
+        run: pnpm build:web
       - name: Type check
         run: pnpm typecheck
-
-      - name: Run tests
+      - name: Type check web console
+        run: pnpm typecheck:web
+      - name: Check source formatting
+        run: pnpm lint
+      - name: Test backend and shared modules
         run: pnpm test
+      - name: Install Chromium and Linux libraries
+        run: pnpm --filter @ocs-server/server exec playwright-core install --with-deps --no-shell chromium
+      - name: Verify a real browser without a desktop session
+        run: env -u DISPLAY -u WAYLAND_DISPLAY pnpm smoke
+      - name: Verify the web console in a real browser
+        run: pnpm test:web
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate Compose configuration
+        run: docker compose --file deploy/compose.yaml config --quiet
+      - name: Build the complete runtime image
+        run: docker build --pull --tag ocs-server-headless:ci .
+      - name: Verify Chromium, non-root startup and crash recovery
+        run: bash scripts/test-container.sh ocs-server-headless:ci

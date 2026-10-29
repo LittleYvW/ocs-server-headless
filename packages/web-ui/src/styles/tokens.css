@@ -1,0 +1,30 @@
+:root {
+	color-scheme: dark;
+	--ink-0: #05070a;
+	--ink-1: #070a0e;
+	--ink-2: #0b0f14;
+	--ink-3: #10151c;
+	--line-1: rgba(255, 255, 255, 0.07);
+	--line-2: rgba(255, 255, 255, 0.12);
+	--line-3: rgba(255, 255, 255, 0.2);
+	--text-1: #e7edf3;
+	--text-2: #9aa7b5;
+	--text-3: #6d7a89;
+	--accent: #7bdcbe;
+	--accent-line: rgba(123, 220, 190, 0.42);
+	--accent-soft: rgba(123, 220, 190, 0.1);
+	--warn: #d9b878;
+	--warn-line: rgba(217, 184, 120, 0.38);
+	--warn-soft: rgba(217, 184, 120, 0.09);
+	--danger: #e08a8a;
+	--danger-line: rgba(224, 138, 138, 0.38);
+	--danger-soft: rgba(224, 138, 138, 0.08);
+	--info: #8aa9cf;
+	--radius: 1px;
+	--ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+	--font-sans: 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', system-ui,
+		sans-serif;
+	--font-mono: 'Cascadia Code', 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+	--rail: 228px;
+	--page-x: clamp(20px, 4vw, 56px);
+}

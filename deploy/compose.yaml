@@ -1,0 +1,40 @@
+name: ocs-server-headless
+
+services:
+  ocs:
+    image: ${OCS_IMAGE:-ocs-server-headless:local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    # The application image comes from this checkout, not a registry.
+    pull_policy: build
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    shm_size: 1gb
+    cap_drop:
+      - ALL
+    # Chromium's sandbox chroots inside its own user namespace.
+    cap_add:
+      - SYS_CHROOT
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp-chromium.json
+    environment:
+      OCS_HOST: 0.0.0.0
+      OCS_PORT: '15319'
+      OCS_DATA_DIR: /data
+      OCS_MAX_BROWSERS: ${OCS_MAX_BROWSERS:-4}
+      OCS_ALLOWED_ORIGINS: ${OCS_ALLOWED_ORIGINS:-}
+    ports:
+      - '${OCS_BIND_ADDRESS:-127.0.0.1}:${OCS_PORT:-15319}:15319'
+    volumes:
+      - ocs-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+volumes:
+  ocs-data:

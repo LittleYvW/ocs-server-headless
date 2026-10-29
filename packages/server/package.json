@@ -1,0 +1,30 @@
+{
+	"name": "@ocs-server/server",
+	"version": "0.1.0",
+	"private": true,
+	"main": "dist/index.js",
+	"files": [
+		"dist",
+		"web"
+	],
+	"scripts": {
+		"build": "tsc",
+		"typecheck": "tsc --noEmit",
+		"dev": "tsc && concurrently -k \"tsc --watch --preserveWatchOutput\" \"node --watch dist/index.js\"",
+		"start": "node dist/index.js",
+		"test": "tsc && vitest run --exclude \"**/*.cjs\" && node --test tests/*.test.cjs",
+		"smoke": "node dist/smoke.js",
+		"browser:install": "playwright-core install --no-shell chromium"
+	},
+	"dependencies": {
+		"@ocs-server/common": "workspace:*",
+		"express": "^4.21.2",
+		"playwright-core": "catalog:"
+	},
+	"devDependencies": {
+		"@types/express": "^4.17.21",
+		"@types/node": "^22.0.0",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}

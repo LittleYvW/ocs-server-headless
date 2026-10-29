@@ -1,69 +1,55 @@
 {
-	"name": "ocs-desktop",
-	"version": "3.1.0",
-	"description": "desktop for userscript",
+	"name": "ocs-server-headless",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Headless browser automation service with a Web management API",
 	"packageManager": "pnpm@10.21.0",
-	"files": [
-		"lib",
-		"dist"
-	],
 	"scripts": {
-		"build": "pnpm typecheck && gulp -f ./scripts/build-app.js",
-		"build:upgrader-stub": "gulp -f ./scripts/build-upgrader-stub.js",
-		"typecheck": "pnpm --filter @ocs-desktop/common build && pnpm --filter @ocs-desktop/app exec tsc --noEmit && pnpm --filter @ocs-desktop/web exec vue-tsc --noEmit",
-		"lint": "prettier -c ./.prettierrc.json --check \"**/*.{ts,js,vue,css}\" && eslint ./packages --ext .ts,.tsx,.js,.jsx,.vue",
-		"lint:fix": "prettier -c ./.prettierrc.json --write \"**/*.{ts,js,vue,css}\" && eslint ./packages --ext .ts,.tsx,.js,.jsx,.vue --fix",
-		"test": "pnpm --filter @ocs-desktop/common test && pnpm --filter @ocs-desktop/app test",
+		"build": "pnpm --filter @ocs-server/common build && pnpm --filter @ocs-server/server build",
+		"typecheck": "pnpm --filter @ocs-server/common build && pnpm --filter @ocs-server/server typecheck",
+		"lint": "prettier --check \"packages/server/**/*.{ts,cjs}\" \"packages/web-ui/src/**/*.{ts,vue,css}\" \"packages/web-ui/tests/**/*.cjs\" \"packages/web-ui/vite.config.ts\" \"packages/common/**/*.ts\"",
+		"lint:fix": "prettier --write \"packages/server/**/*.{ts,cjs}\" \"packages/web-ui/src/**/*.{ts,vue,css}\" \"packages/web-ui/tests/**/*.cjs\" \"packages/web-ui/vite.config.ts\" \"packages/common/**/*.ts\"",
+		"test": "pnpm --filter @ocs-server/common build && pnpm --filter @ocs-server/common test && pnpm --filter @ocs-server/server test",
 		"prepare": "husky",
-		"postinstall": "pnpm --filter @ocs-desktop/app exec install-electron",
 		"setup": "bash ./scripts/setup.sh",
-		"dev": "pnpm --filter @ocs-desktop/app dev"
+		"dev": "pnpm --filter @ocs-server/common build && pnpm --filter @ocs-server/server dev",
+		"start": "pnpm --filter @ocs-server/server start",
+		"browser:install": "pnpm --filter @ocs-server/server browser:install",
+		"smoke": "pnpm build && pnpm --filter @ocs-server/server smoke",
+		"build:web": "pnpm --filter @ocs-server/web-ui build",
+		"dev:web": "pnpm --filter @ocs-server/web-ui dev",
+		"typecheck:web": "pnpm --filter @ocs-server/web-ui typecheck",
+		"test:web": "pnpm --filter @ocs-server/web-ui test:e2e"
 	},
 	"devDependencies": {
 		"@commitlint/cli": "^19.0.0",
 		"@commitlint/config-conventional": "^19.0.0",
-		"@html-eslint/eslint-plugin": "^0.15.0",
 		"@types/node": "^22.0.0",
-		"@typescript-eslint/eslint-plugin": "^5.19.0",
-		"@typescript-eslint/parser": "^5.19.0",
-		"browser-env": "^3.3.0",
 		"concurrently": "^9.2.1",
 		"cz-conventional-changelog": "^3.3.0",
-		"del": "^6.0.0",
-		"eslint": "^7.32.0",
-		"eslint-config-prettier": "^8.5.0",
-		"eslint-config-standard": "^16.0.3",
-		"eslint-plugin-import": "^2.22.1",
-		"eslint-plugin-node": "^11.1.0",
-		"eslint-plugin-prettier": "^4.0.0",
-		"eslint-plugin-promise": "^4.2.1",
-		"eslint-plugin-vue": "^9.8.0",
-		"gulp": "^4.0.2",
-		"gulp-cli": "^2.3.0",
-		"gulp-zip": "^5.1.0",
 		"husky": "^9.0.0",
 		"prettier": "^2.8.8",
 		"typescript": "catalog:"
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/ocsjs/ocs-desktop.git"
+		"url": "git+https://github.com/LittleYvW/ocs-server-headless.git"
 	},
 	"keywords": [
 		"ocs",
 		"script",
 		"playwright",
-		"electron",
-		"vue",
-		"arco-design-vue",
+		"headless",
+		"server",
+		"automation",
 		"typescript"
 	],
 	"author": "enncy",
 	"license": "MIT",
 	"bugs": {
-		"url": "https://github.com/ocsjs/ocs-desktop/issues"
+		"url": "https://github.com/LittleYvW/ocs-server-headless/issues"
 	},
-	"homepage": "https://github.com/ocsjs/ocs-desktop#readme",
+	"homepage": "https://github.com/LittleYvW/ocs-server-headless#readme",
 	"engines": {
 		"node": ">=22.0.0",
 		"pnpm": ">=10.0.0"

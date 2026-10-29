@@ -1,0 +1,33 @@
+[Unit]
+Description=OCS headless browser management server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# Replace these paths and the service account before installation.
+User=ocs
+Group=ocs
+WorkingDirectory=/opt/ocs-server
+Environment=NODE_ENV=production
+Environment=OCS_HOST=127.0.0.1
+Environment=OCS_PORT=15319
+Environment=OCS_DATA_DIR=/var/lib/ocs-server
+# The console is served from packages/server/web when present. Override with
+# OCS_WEB_DIR if the build is installed elsewhere; the backend runs without it.
+# Optional, root-owned file: OCS_AUTH_TOKEN=... and other OCS_* settings.
+EnvironmentFile=-/etc/ocs-server.env
+# Install Chromium as this same service user, or set OCS_BROWSER_EXECUTABLE_PATH.
+# Use an absolute native Linux Node.js path; systemd does not source shell profiles.
+ExecStart=/usr/bin/node /opt/ocs-server/packages/server/dist/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+UMask=0077
+StateDirectory=ocs-server
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

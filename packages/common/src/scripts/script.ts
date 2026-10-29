@@ -6,8 +6,10 @@ export type RunFunction = (...args: any[]) => any;
 export interface ScriptOptions<Run extends RunFunction = RunFunction> {
 	name: string;
 	run: Run;
-	/** 图标 URL（网站地址或图片地址，经本地服务 /icon 代理解析） */
+	/** 图标 URL */
 	icon?: string;
+	/** 登录过程可能需要 OCR；调用方应提示能力限制，不阻止无验证码的登录。 */
+	needOCR?: boolean;
 }
 
 export abstract class Script<Run extends RunFunction = RunFunction, E extends EventsRecord = EventsRecord>
@@ -17,12 +19,14 @@ export abstract class Script<Run extends RunFunction = RunFunction, E extends Ev
 	name: string;
 	run: Run;
 	icon?: string;
+	needOCR?: boolean;
 
 	constructor(opts: ScriptOptions<Run>) {
 		super();
 		this.name = opts.name;
 		this.run = opts.run;
 		this.icon = opts.icon;
+		this.needOCR = opts.needOCR;
 	}
 }
 

@@ -1,5 +1,5 @@
 name: 🐞 Bug 报告
-description: 报告软件错误，帮助我们改进
+description: 报告无头服务、控制台或部署问题
 title: "[Bug]: "
 labels: ["bug", "triage"]
 body:
@@ -22,14 +22,13 @@ body:
   - type: dropdown
     id: platform
     attributes:
-      label: 操作系统
-      description: 请选择你使用的操作系统
+      label: 服务器操作系统
+      description: 请选择实际运行服务的 Linux 系统
       options:
-        - Windows (10/11)
-        - Windows 7/8
-        - macOS (Intel)
-        - macOS (Apple Silicon)
+        - Linux (Docker / Compose)
         - Linux (Ubuntu/Debian)
+        - Linux (openEuler)
+        - Linux (WSL)
         - Linux (其他发行版)
       default: 0
     validations:
@@ -38,9 +37,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: 应用版本
-      description: 可在设置 - 关于中查看
-      placeholder: "e.g., v2.10.0"
+      label: 源码版本
+      description: 填写 git rev-parse HEAD 的结果，或源码包来源和日期
+      placeholder: "Git commit SHA / 源码包日期"
     validations:
       required: true
 
@@ -59,9 +58,9 @@ body:
       label: 复现步骤
       description: 如何复现此问题
       placeholder: |
-        1. 打开应用
-        2. 点击 '...'
-        3. 滚动到 '...'
+        1. 执行部署命令或启动服务
+        2. 打开控制台或请求 API
+        3. 执行 '...'
         4. 看到错误
     validations:
       required: true
@@ -79,5 +78,5 @@ body:
     id: logs
     attributes:
       label: 日志/截图
-      description: 如有错误日志或截图请在此粘贴
+      description: 附上部署方式、服务与浏览器版本，以及已删除令牌和账号密码的日志
       render: shell

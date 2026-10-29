@@ -1,10 +1,7 @@
-node_modules
-dist
-lib
-out
-package-lock.json
+node_modules/
+/packages/common/lib/
+/packages/server/dist/
+/packages/server/web/
+/packages/web-ui/test-results/
 pnpm-lock.yaml
-public
-stats.html
-.md
-.chrome-temp/*
+releases/

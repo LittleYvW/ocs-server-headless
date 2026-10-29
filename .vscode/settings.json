@@ -1,57 +1,15 @@
 {
-	"cSpell.words": [
-		"greasyfork",
-		"ICVE",
-		"ocsjs",
-		"scriptcat",
-		"userscript",
-		"userscripts"
-	],
-	"eslint.validate": [
-		"javascript",
-		"javascriptreact",
-		"vue"
-	],
+	"cSpell.words": ["ICVE", "ocsjs", "userscript", "userscripts"],
 	"editor.formatOnSave": true,
-	"editor.codeActionsOnSave": {
-		"source.fixAll.eslint": "explicit"
-	},
 	"editor.defaultFormatter": "esbenp.prettier-vscode",
-	/** 样式自动生成 */
-	"less.compile": {
-		"compress": false,
-		"sourceMap": false,
-		"out": "../css/"
-	},
-	/** 鼠标中键代码缩进 */
 	"editor.mouseWheelZoom": true,
-	/** 鼠标滚动速度 */
 	"editor.mouseWheelScrollSensitivity": 2,
-	/** 不生成 @return 的 jsdoc */
 	"typescript.suggest.jsdoc.generateReturns": false,
-	"[typescript]": {
-		"editor.defaultFormatter": "esbenp.prettier-vscode"
-	},
-	"[jsonc]": {
-		"editor.defaultFormatter": "vscode.json-language-features"
-	},
 	"editor.wordBasedSuggestions": "off",
-	/**
-	 * 排除构建产物的文件监视：electron-builder 打包时会在 dist/ 下解压数千个文件，
-	 * VS Code watcher 持有的目录句柄会导致 rename win-unpacked.tmp 失败（EPERM）。
-	 * 修改后需重启/重载 VS Code 释放已有句柄。
-	 */
-	// "files.watcherExclude": {
-	// 	"**/dist/**": true,
-	// 	"**/out/**": true,
-	// 	"**/releases/**": true
-	// },
-	// "search.exclude": {
-	// 	"**/dist": true,
-	// 	"**/out": true,
-	// 	"**/releases": true
-	// },
-	// "files.exclude": {
-	// 	"**/releases": true
-	// }
+	"files.watcherExclude": {
+		"**/node_modules/**": true,
+		"**/dist/**": true,
+		"**/packages/common/lib/**": true,
+		"**/packages/server/web/**": true
+	}
 }

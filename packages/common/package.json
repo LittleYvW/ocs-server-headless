@@ -1,32 +1,32 @@
 {
-	"name": "@ocs-desktop/common",
+	"name": "@ocs-server/common",
 	"version": "0.0.1",
-	"description": "common package of ocs-desktop",
+	"private": true,
+	"description": "Shared validation and built-in automation for OCS Server Headless",
 	"main": "./lib/index.js",
+	"files": [
+		"lib"
+	],
 	"types": "./lib/index.d.ts",
 	"exports": {
 		".": {
 			"types": "./lib/index.d.ts",
 			"default": "./lib/index.js"
 		},
-		"./web": {
-			"types": "./lib/web.d.ts",
-			"default": "./lib/web.js"
-		},
-		"./node": {
-			"types": "./lib/node.d.ts",
-			"default": "./lib/node.js"
+		"./automation": {
+			"types": "./lib/automation.d.ts",
+			"default": "./lib/automation.js"
 		},
 		"./package.json": "./package.json"
 	},
 	"scripts": {
-		"tsc": "tsc",
-		"build": "tsc",
+		"build": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\" && tsc",
 		"test": "vitest run"
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/ocsjs/ocs-desktop.git"
+		"url": "git+https://github.com/LittleYvW/ocs-server-headless.git",
+		"directory": "packages/common"
 	},
 	"keywords": [
 		"ocs",
@@ -35,9 +35,9 @@
 	"author": "enncy",
 	"license": "MIT",
 	"bugs": {
-		"url": "https://github.com/ocsjs/ocs-desktop/issues"
+		"url": "https://github.com/LittleYvW/ocs-server-headless/issues"
 	},
-	"homepage": "https://github.com/ocsjs/ocs-desktop#readme",
+	"homepage": "https://github.com/LittleYvW/ocs-server-headless#readme",
 	"dependencies": {
 		"axios": "catalog:"
 	},
