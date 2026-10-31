@@ -93,7 +93,7 @@ PATCH 和 DELETE 要求实例处于 stopped 或 error 状态；运行中、启�
 
 | 方法 | 路径 | 参数 / 返回 |
 | --- | --- | --- |
-| GET | `/api/v1/browsers/:id/pages` | 页面数组，每项包括 `id,url,title` |
+| GET | `/api/v1/browsers/:id/pages` | 页面数组，每项包括 `id,url,title,automationRunning` |
 | POST | `/api/v1/browsers/:id/navigate` | `{"url":"https://example.com","pageId":"可选"}`，返回页面 `id,url,title` |
 | POST | `/api/v1/browsers/:id/click` | `{"selector":"button[type=submit]","pageId":"可选"}` |
 | POST | `/api/v1/browsers/:id/fill` | `{"selector":"input[name=username]","text":"内容","pageId":"可选"}` |
@@ -101,12 +101,32 @@ PATCH 和 DELETE 要求实例处于 stopped 或 error 状态；运行中、启�
 | POST | `/api/v1/browsers/:id/new-page` | `{"url":"可选，默认 about:blank"}` |
 | POST | `/api/v1/browsers/:id/close-page` | `{"pageId":"必填"}` |
 | POST | `/api/v1/browsers/:id/reload` | `{"pageId":"可选"}` |
+| POST | `/api/v1/browsers/:id/go-back` | `{"pageId":"可选"}`，返回当前页面信息；无历史时保持原页 |
+| POST | `/api/v1/browsers/:id/go-forward` | `{"pageId":"可选"}`，返回当前页面信息；无历史时保持原页 |
 | POST | `/api/v1/browsers/:id/press` | `{"selector":"input","key":"Enter","pageId":"可选"}` |
 | POST | `/api/v1/browsers/:id/check` | `{"selector":"input[type=checkbox]","checked":true,"pageId":"可选"}` |
 | POST | `/api/v1/browsers/:id/select` | `{"selector":"select","values":["value"],"pageId":"可选"}` |
 | GET | `/api/v1/browsers/:id/preview?pageId=...` | 带 Bearer 的 MJPEG 实时预览；同实例限一个连接 |
+| POST | `/api/v1/browsers/:id/control` | `{"pageId":"必填"}`，申请独占控制，返回 `sessionId,pageId,viewport,leaseMs` |
+| DELETE | `/api/v1/browsers/:id/control` | `{"pageId":"必填","sessionId":"必填"}`，结束指定控制会话；重复释放无副作用 |
+| POST | `/api/v1/browsers/:id/input` | `{"pageId":"必填","sessionId":"必填","sequence":1,"events":[...]}`，按序执行输入批次 |
 
-未提供 pageId 时使用 worker 的默认页面。选择器交由 Playwright 定位；操作存在超时，不提供任意 JavaScript 求值、Node 执行、文件读取或 CDP 透传 API。截图可能包含站点敏感内容，需要管理令牌才能读取。
+除 control/input 和关闭页面外，未提供 pageId 时使用 worker 的默认页面。选择器交由 Playwright 定位；操作存在超时，不提供任意 JavaScript 求值、Node 执行、文件读取或 CDP 透传 API。截图可能包含站点敏感内容，需要管理令牌才能读取。
+
+直接输入的 `events` 每批最多 32 项，支持：
+
+```json
+[
+  {"type":"click","x":0.25,"y":0.4,"button":"left"},
+  {"type":"text","text":"中文内容"},
+  {"type":"key","key":"KeyA","modifiers":["ControlOrMeta"]},
+  {"type":"wheel","x":0.5,"y":0.5,"deltaX":0,"deltaY":240}
+]
+```
+
+`x/y` 是相对于整张视口画面的归一化坐标，范围 `[0,1)`；worker 换算为视口 CSS 像素。MJPEG 各帧头的 `X-Viewport-Width/Height` 提供远端视口尺寸。`text` 每项限 10000 字符，滚轮各轴绝对值不超过 10000；修饰键支持 Alt/Control/ControlOrMeta/Meta/Shift。文本提交到远端当前焦点，不记录到事件或普通日志。
+
+每实例仅允许一个控制会话，15 秒无输入即过期；空 `events` 可作为心跳。`sequence` 从 1 连续递增，重复上一批仅确认，不重放；其他乱序请求返回 `INPUT_OUT_OF_ORDER`。请求必须始终使用申请时的 pageId/sessionId；切页应先释放旧会话。窗口失焦、隐藏、停止预览或退出页面时控制台释放控制；异常断网由租约回收。控制中的页面关闭后立即失效，视口尺寸改变后需重新申请控制。内置自动化正在操作的页面拒绝人工输入和修改操作，截图/预览仍可读取。
 
 ## 用户脚本
 

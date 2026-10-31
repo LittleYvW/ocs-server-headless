@@ -109,7 +109,6 @@ async function main() {
 		await page.goto(`${base}/#/instances/${previewProfile.id}`);
 		await page.locator('.page-head__actions').getByRole('button', { name: '启动', exact: true }).click();
 		await page.locator('.status--running').waitFor({ timeout: 30000 });
-		await page.getByRole('button', { name: '开始预览', exact: true }).click();
 		const liveImage = page.getByAltText('浏览器实时画面');
 		await liveImage.waitFor();
 		await page.waitForFunction(() => document.querySelector('img[alt="浏览器实时画面"]')?.naturalWidth > 0);

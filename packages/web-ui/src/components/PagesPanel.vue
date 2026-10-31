@@ -25,25 +25,33 @@ const shotAt = ref('');
 const shotBusy = ref(false);
 const shotError = ref('');
 const autoRefresh = ref(true);
+const previewActive = ref(false);
+const livePreview = ref<InstanceType<typeof LivePreview>>();
 
 const navUrl = ref('');
 const clickSelector = ref('');
 const fillSelector = ref('');
 const fillText = ref('');
-const action = ref<'' | 'navigate' | 'click' | 'fill'>('');
+const action = ref<
+	'' | 'navigate' | 'click' | 'fill' | 'new-page' | 'close-page' | 'reload' | 'go-back' | 'go-forward'
+>('');
 const actionError = ref('');
 
 let timer: ReturnType<typeof setInterval> | undefined;
 let pageTimer: ReturnType<typeof setTimeout> | undefined;
 let controller: AbortController | undefined;
 let requestSeq = 0;
+let pagesRequestSeq = 0;
 
 const running = () => props.browser.runtime.status === 'running';
 
 const lastPageEvent = computed(() => {
 	for (let index = feed.items.length - 1; index >= 0; index -= 1) {
 		const event = feed.items[index];
-		if ((event.type === 'page-created' || event.type === 'page-closed') && profileOf(event) === props.browser.id) {
+		if (
+			['page-created', 'page-closed', 'automation-result'].includes(event.type) &&
+			profileOf(event) === props.browser.id
+		) {
 			return event.id;
 		}
 	}
@@ -57,6 +65,7 @@ function revokeShot(): void {
 
 function resetView(): void {
 	requestSeq += 1;
+	pagesRequestSeq += 1;
 	controller?.abort();
 	controller = undefined;
 	shotBusy.value = false;
@@ -69,27 +78,31 @@ function resetView(): void {
 
 async function loadPages(preferred?: string): Promise<void> {
 	if (!running()) return;
+	const seq = ++pagesRequestSeq;
+	const selection = selectedId.value;
 	loadingPages.value = true;
 	pagesError.value = '';
 	try {
 		const list = await api.browsers.pages(props.browser.id);
+		if (seq !== pagesRequestSeq || !running()) return;
 		pages.value = list;
 		const previous = selectedId.value;
 		const wanted =
-			preferred || (list.some((page) => page.id === selectedId.value) ? selectedId.value : list[0]?.id || '');
+			(preferred && selection === selectedId.value ? preferred : '') ||
+			(list.some((page) => page.id === selectedId.value) ? selectedId.value : list[0]?.id || '');
 		selectedId.value = wanted;
 		const current = list.find((page) => page.id === wanted);
 		// Background refreshes must not overwrite a URL the user is typing.
 		if (current && (wanted !== previous || !navUrl.value)) navUrl.value = current.url;
 	} catch (error) {
-		pagesError.value = describeError(error);
+		if (seq === pagesRequestSeq) pagesError.value = describeError(error);
 	} finally {
-		loadingPages.value = false;
+		if (seq === pagesRequestSeq) loadingPages.value = false;
 	}
 }
 
 async function capture(): Promise<void> {
-	if (!running()) return;
+	if (!running() || previewActive.value) return;
 	const seq = ++requestSeq;
 	controller?.abort();
 	const local = new AbortController();
@@ -117,7 +130,7 @@ async function capture(): Promise<void> {
 }
 
 async function refreshPages(): Promise<void> {
-	await loadPages(selectedId.value);
+	await loadPages();
 	await capture();
 }
 
@@ -128,7 +141,7 @@ async function reloadAll(): Promise<void> {
 function ensureTimer(): void {
 	if (timer) clearInterval(timer);
 	timer = undefined;
-	if (!autoRefresh.value || !running()) return;
+	if (!autoRefresh.value || !running() || previewActive.value) return;
 	timer = setInterval(() => {
 		if (!document.hidden && running()) void capture();
 	}, 6000);
@@ -136,6 +149,7 @@ function ensureTimer(): void {
 
 function selectPage(id: string): void {
 	if (id === selectedId.value) return;
+	livePreview.value?.stopControl();
 	selectedId.value = id;
 	const page = pages.value.find((item) => item.id === id);
 	if (page) navUrl.value = page.url;
@@ -150,6 +164,7 @@ async function navigate(): Promise<void> {
 		return;
 	}
 	action.value = 'navigate';
+	livePreview.value?.stopControl();
 	actionError.value = '';
 	try {
 		const page = await api.browsers.navigate(props.browser.id, url, selectedId.value || undefined);
@@ -164,6 +179,35 @@ async function navigate(): Promise<void> {
 	}
 }
 
+async function pageAction(next: 'new-page' | 'close-page' | 'reload' | 'go-back' | 'go-forward'): Promise<void> {
+	if (action.value || !running() || (next !== 'new-page' && !selectedId.value)) return;
+	livePreview.value?.stopControl();
+	action.value = next;
+	actionError.value = '';
+	try {
+		if (next === 'new-page') {
+			const page = await api.browsers.newPage(props.browser.id);
+			selectedId.value = page.id;
+			navUrl.value = page.url;
+			await loadPages(page.id);
+		} else {
+			const page = await api.browsers.pageAction(props.browser.id, next, selectedId.value);
+			if (next !== 'close-page') navUrl.value = page.url;
+			await loadPages();
+		}
+		await capture();
+	} catch (error) {
+		actionError.value = describeError(error);
+	} finally {
+		action.value = '';
+	}
+}
+
+function pageChanged(): void {
+	clearTimeout(pageTimer);
+	pageTimer = setTimeout(() => void loadPages(), 250);
+}
+
 async function click(): Promise<void> {
 	if (action.value || !running()) return;
 	const selector = clickSelector.value.trim();
@@ -174,6 +218,7 @@ async function click(): Promise<void> {
 	action.value = 'click';
 	actionError.value = '';
 	try {
+		livePreview.value?.stopControl();
 		await api.browsers.click(props.browser.id, selector, selectedId.value || undefined);
 		await new Promise((resolve) => setTimeout(resolve, 350));
 		await loadPages(selectedId.value);
@@ -195,6 +240,7 @@ async function fill(): Promise<void> {
 	action.value = 'fill';
 	actionError.value = '';
 	try {
+		livePreview.value?.stopControl();
 		await api.browsers.fill(props.browser.id, selector, fillText.value, selectedId.value || undefined);
 		fillText.value = '';
 		await capture();
@@ -207,7 +253,7 @@ async function fill(): Promise<void> {
 }
 
 function onVisibility(): void {
-	if (!document.hidden && running()) void capture();
+	if (!document.hidden && running() && !previewActive.value) void capture();
 }
 
 watch(pages, (list) => emit('count', list.length), { immediate: true });
@@ -220,6 +266,14 @@ watch(lastPageEvent, () => {
 });
 
 watch(autoRefresh, ensureTimer);
+watch(previewActive, (active) => {
+	ensureTimer();
+	if (active) {
+		requestSeq++;
+		controller?.abort();
+		shotBusy.value = false;
+	} else if (running()) void capture();
+});
 
 watch(
 	() => props.browser.runtime.status,
@@ -381,6 +435,11 @@ onBeforeUnmount(() => {
 					@click="selectPage(page.id)"
 				>
 					<span class="page-item__title truncate">{{ page.title || '未命名页面' }}</span>
+					<span
+						v-if="page.automationRunning"
+						class="tag tag--dim"
+						>自动化中</span
+					>
 					<span class="page-item__url mono truncate">{{ page.url }}</span>
 				</button>
 			</div>
@@ -396,64 +455,76 @@ onBeforeUnmount(() => {
 			</footer>
 		</section>
 
-		<section class="panel shot-panel">
-			<header class="panel__head">
-				<span class="panel__title">Screen</span>
-				<div class="shot-tools">
-					<BaseSwitch
-						v-model="autoRefresh"
-						label="自动刷新截图"
-						>自动</BaseSwitch
-					>
-					<span class="dim small mono">6s</span>
-					<button
-						type="button"
-						class="icon-btn"
-						title="立即刷新截图"
-						:disabled="shotBusy"
-						@click="capture"
-					>
-						<AppIcon
-							name="refresh"
-							:size="14"
-						/>
-					</button>
-				</div>
-			</header>
-
-			<div class="shot">
-				<div
-					v-if="shotBusy"
-					class="shot__progress"
-					aria-hidden="true"
-				>
-					<span></span>
-				</div>
-				<img
-					v-if="shotUrl"
-					:src="shotUrl"
-					alt="当前页面截图"
-				/>
-				<div
-					v-else
-					class="shot__placeholder"
-				>
-					{{ shotError ? '截图读取失败' : '等待截图…' }}
-				</div>
-			</div>
-
-			<div
-				v-if="shotError"
-				class="shot__error inline-error"
+		<div class="screen-column">
+			<LivePreview
+				ref="livePreview"
+				:browser-id="browser.id"
+				:page-id="selectedId"
+				@active="previewActive = $event"
+				@changed="pageChanged"
+			/>
+			<section
+				v-if="!previewActive"
+				class="panel shot-panel"
 			>
-				{{ shotError }}
-			</div>
+				<header class="panel__head">
+					<span class="panel__title">Screen</span>
+					<div class="shot-tools">
+						<BaseSwitch
+							v-model="autoRefresh"
+							label="自动刷新截图"
+							>自动</BaseSwitch
+						>
+						<span class="dim small mono">6s</span>
+						<button
+							type="button"
+							class="icon-btn"
+							title="立即刷新截图"
+							:disabled="shotBusy"
+							@click="capture"
+						>
+							<AppIcon
+								name="refresh"
+								:size="14"
+							/>
+						</button>
+					</div>
+				</header>
 
-			<footer class="panel__foot">
-				<span class="mono">{{ shotAt ? `SHOT ${formatStamp(shotAt)}` : '—' }}</span>
-				<span>{{ autoRefresh ? '自动刷新开启' : '自动刷新暂停' }}</span>
-			</footer>
-		</section>
+				<div class="shot">
+					<div
+						v-if="shotBusy"
+						class="shot__progress"
+						aria-hidden="true"
+					>
+						<span></span>
+					</div>
+					<img
+						v-if="shotUrl"
+						:src="shotUrl"
+						alt="当前页面截图"
+					/>
+					<div
+						v-else
+						class="shot__placeholder"
+					>
+						{{ shotError ? '截图读取失败' : '等待截图…' }}
+					</div>
+				</div>
+
+				<div
+					v-if="shotError"
+					class="shot__error inline-error"
+				>
+					{{ shotError }}
+				</div>
+
+				<footer class="panel__foot">
+					<span class="mono">{{ shotAt ? `SHOT ${formatStamp(shotAt)}` : '—' }}</span>
+					<span>{{ autoRefresh ? '自动刷新开启' : '自动刷新暂停' }}</span>
+				</footer>
+			</section>
+		</div>
 	</div>
 
 	<section
@@ -461,10 +532,49 @@ onBeforeUnmount(() => {
 		class="panel ops-panel"
 	>
 		<header class="panel__head">
-			<span class="panel__title">Restricted Actions</span>
-			<span class="dim small">仅导航、点击、填写，无 JS / CDP 入口</span>
+			<span class="panel__title">页面操作</span>
 		</header>
 		<div class="ops">
+			<div class="ops__navigation">
+				<BaseButton
+					size="sm"
+					:disabled="!!action || !selectedId"
+					title="后退"
+					@click="pageAction('go-back')"
+					><AppIcon
+						name="left"
+						:size="14"
+					/>后退</BaseButton
+				>
+				<BaseButton
+					size="sm"
+					:disabled="!!action || !selectedId"
+					title="前进"
+					@click="pageAction('go-forward')"
+					><AppIcon
+						name="right"
+						:size="14"
+					/>前进</BaseButton
+				>
+				<BaseButton
+					size="sm"
+					:disabled="!!action || !selectedId"
+					@click="pageAction('reload')"
+					>刷新页面</BaseButton
+				>
+				<BaseButton
+					size="sm"
+					:disabled="!!action"
+					@click="pageAction('new-page')"
+					>新建标签页</BaseButton
+				>
+				<BaseButton
+					size="sm"
+					:disabled="!!action || !selectedId"
+					@click="pageAction('close-page')"
+					>关闭标签页</BaseButton
+				>
+			</div>
 			<form
 				class="ops__row"
 				@submit.prevent="navigate"
@@ -488,64 +598,67 @@ onBeforeUnmount(() => {
 				>
 			</form>
 
-			<div class="ops__grid">
-				<form
-					class="ops__row"
-					@submit.prevent="click"
-				>
-					<label class="field field--grow">
-						<span class="field__label">点击选择器</span>
-						<span class="field__control">
-							<input
-								v-model="clickSelector"
-								maxlength="2000"
-								spellcheck="false"
-								placeholder="button[type=submit]"
-							/>
-						</span>
-					</label>
-					<BaseButton
-						type="submit"
-						:busy="action === 'click'"
-						:disabled="!!action"
-						>点击</BaseButton
+			<details class="advanced-actions">
+				<summary>高级操作 · 选择器</summary>
+				<div class="ops__grid">
+					<form
+						class="ops__row"
+						@submit.prevent="click"
 					>
-				</form>
+						<label class="field field--grow">
+							<span class="field__label">点击选择器</span>
+							<span class="field__control">
+								<input
+									v-model="clickSelector"
+									maxlength="2000"
+									spellcheck="false"
+									placeholder="button[type=submit]"
+								/>
+							</span>
+						</label>
+						<BaseButton
+							type="submit"
+							:busy="action === 'click'"
+							:disabled="!!action"
+							>点击</BaseButton
+						>
+					</form>
 
-				<form
-					class="ops__row"
-					@submit.prevent="fill"
-				>
-					<label class="field field--grow">
-						<span class="field__label">填写字段</span>
-						<span class="field__control">
-							<input
-								v-model="fillSelector"
-								maxlength="2000"
-								spellcheck="false"
-								placeholder="input[name=username]"
-							/>
-						</span>
-					</label>
-					<label class="field field--grow">
-						<span class="field__label">内容</span>
-						<span class="field__control">
-							<input
-								v-model="fillText"
-								maxlength="100000"
-								spellcheck="false"
-								placeholder="临时输入值"
-							/>
-						</span>
-					</label>
-					<BaseButton
-						type="submit"
-						:busy="action === 'fill'"
-						:disabled="!!action"
-						>填充</BaseButton
+					<form
+						class="ops__row"
+						@submit.prevent="fill"
 					>
-				</form>
-			</div>
+						<label class="field field--grow">
+							<span class="field__label">填写字段</span>
+							<span class="field__control">
+								<input
+									v-model="fillSelector"
+									maxlength="2000"
+									spellcheck="false"
+									placeholder="input[name=username]"
+								/>
+							</span>
+						</label>
+						<label class="field field--grow">
+							<span class="field__label">内容</span>
+							<span class="field__control">
+								<input
+									v-model="fillText"
+									maxlength="100000"
+									spellcheck="false"
+									placeholder="临时输入值"
+								/>
+							</span>
+						</label>
+						<BaseButton
+							type="submit"
+							:busy="action === 'fill'"
+							:disabled="!!action"
+							>填充</BaseButton
+						>
+					</form>
+				</div>
+			</details>
 
 			<p
 				v-if="actionError"
@@ -556,11 +669,6 @@ onBeforeUnmount(() => {
 			<p class="ops__note">填充内容仅提交到当前页面，不会写入事件记录或客户端日志。</p>
 		</div>
 	</section>
-	<LivePreview
-		v-if="running()"
-		:browser-id="browser.id"
-		:page-id="selectedId"
-	/>
 </template>
 
 <style scoped>
@@ -569,6 +677,25 @@ onBeforeUnmount(() => {
 	grid-template-columns: 264px minmax(0, 1fr);
 	gap: 18px;
 	align-items: stretch;
+}
+.screen-column {
+	min-width: 0;
+}
+.screen-column > .shot-panel {
+	margin-top: 18px;
+}
+.ops__navigation {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.advanced-actions summary {
+	cursor: pointer;
+	color: var(--text-2);
+	font-size: 12px;
+}
+.advanced-actions[open] summary {
+	margin-bottom: 14px;
 }
 
 .ghost-pages {

@@ -7,6 +7,8 @@ export interface ScreencastFrame {
 	base64: string;
 	contentType: 'image/jpeg';
 	timestamp: number;
+	viewportWidth: number;
+	viewportHeight: number;
 }
 
 export interface ScreencastOptions {
@@ -72,8 +74,17 @@ export class Screencast {
 				return;
 			}
 			const frameId = randomUUID();
+			const viewport = page.viewportSize();
 			active.pending = { frameId, sessionId: frame.sessionId };
-			this.onFrame({ frameId, pageId, base64: frame.data, contentType: 'image/jpeg', timestamp: Date.now() });
+			this.onFrame({
+				frameId,
+				pageId,
+				base64: frame.data,
+				contentType: 'image/jpeg',
+				timestamp: Date.now(),
+				viewportWidth: viewport?.width || 0,
+				viewportHeight: viewport?.height || 0
+			});
 		};
 		session.on('Page.screencastFrame', active.onFrame);
 		try {

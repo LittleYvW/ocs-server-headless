@@ -6,6 +6,7 @@ function fixture() {
 	const session = Object.assign(new EventEmitter(), { send: vi.fn(async () => {}), detach: vi.fn(async () => {}) });
 	const page = Object.assign(new EventEmitter(), {
 		isClosed: () => false,
+		viewportSize: () => ({ width: 1365, height: 900 }),
 		context: () => ({ newCDPSession: async () => session })
 	});
 	return { session, page: page as any };

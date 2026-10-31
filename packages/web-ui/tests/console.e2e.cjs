@@ -261,6 +261,8 @@ async function main() {
 		await page.click('.page-head__actions button:has-text("启动")');
 		await page.locator('.status--running').waitFor({ timeout: 90000 });
 		await page.locator('.page-item').first().waitFor({ timeout: 30000 });
+		await page.locator('.live-preview img').waitFor({ timeout: 30000 });
+		await page.locator('.live-preview').getByRole('button', { name: '停止预览', exact: true }).click();
 		await page.waitForFunction(
 			() => {
 				const image = document.querySelector('.shot img');
@@ -273,6 +275,7 @@ async function main() {
 		await saveShot('console-pages.png');
 
 		const ops = page.locator('.ops');
+		await ops.locator('summary').click();
 		await ops.locator('input[placeholder="input[name=username]"]').fill('#name');
 		await ops.locator('input[placeholder="临时输入值"]').fill('Ada');
 		await runAction('fill', () => ops.locator('button:has-text("填充")').click());

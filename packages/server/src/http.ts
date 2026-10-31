@@ -13,6 +13,7 @@ import { createStorageRouter } from './storage';
 import { hostResources } from './resource';
 import { createScriptCatalogRouter } from './catalog';
 import { ApiError, bad, missing, object, fields, text, url, id, browserInput, publicBrowser } from './validation';
+import { browserInputBatch } from './browser-input';
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
@@ -115,6 +116,7 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 					'resource-monitoring',
 					'screenshots',
 					'page-actions',
+					'live-browser-control',
 					'downloads',
 					'sse'
 				]
@@ -238,7 +240,48 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 			res.type('png').send(Buffer.from(shot.base64, 'base64'));
 		})
 	);
-	for (const action of ['new-page', 'close-page', 'reload', 'press', 'check', 'select'] as const) {
+	api.post(
+		'/browsers/:id/control',
+		route(async (req, res) => {
+			const body = object(req.body);
+			fields(body, ['pageId']);
+			return data(
+				res,
+				await runtime.command(profile(req.params.id).id, 'control-start', { pageId: text(body.pageId, 'pageId', 100) })
+			);
+		})
+	);
+	api.delete(
+		'/browsers/:id/control',
+		route(async (req, res) => {
+			const body = object(req.body);
+			fields(body, ['pageId', 'sessionId']);
+			return data(
+				res,
+				await runtime.command(profile(req.params.id).id, 'control-stop', {
+					pageId: text(body.pageId, 'pageId', 100),
+					sessionId: text(body.sessionId, 'sessionId', 100)
+				})
+			);
+		})
+	);
+	api.post(
+		'/browsers/:id/input',
+		route(async (req, res) => {
+			const payload = browserInputBatch(req.body);
+			return data(res, await runtime.command(profile(req.params.id).id, 'input', payload));
+		})
+	);
+	for (const action of [
+		'new-page',
+		'close-page',
+		'reload',
+		'go-back',
+		'go-forward',
+		'press',
+		'check',
+		'select'
+	] as const) {
 		api.post(
 			`/browsers/:id/${action}`,
 			route(async (req, res) => {
@@ -309,7 +352,7 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 				if (res.destroyed || res.writableEnded || typeof frame.base64 !== 'string') return;
 				const bytes = Buffer.from(frame.base64, 'base64');
 				const header = Buffer.from(
-					`--ocs-frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${bytes.length}\r\n\r\n`
+					`--ocs-frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${bytes.length}\r\nX-Viewport-Width: ${frame.viewportWidth}\r\nX-Viewport-Height: ${frame.viewportHeight}\r\n\r\n`
 				);
 				if (!res.write(Buffer.concat([header, bytes, Buffer.from('\r\n')]))) {
 					await new Promise<void>((resolve) => {

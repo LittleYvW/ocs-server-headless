@@ -99,7 +99,29 @@ export interface PageInfo {
 	id: string;
 	url: string;
 	title: string;
+	automationRunning?: boolean;
 }
+
+export interface BrowserControlSession {
+	sessionId: string;
+	pageId: string;
+	viewport: { width: number; height: number };
+	leaseMs: number;
+}
+
+export type InputModifier = 'Alt' | 'Control' | 'ControlOrMeta' | 'Meta' | 'Shift';
+export type BrowserInputEvent =
+	| {
+			type: 'click';
+			x: number;
+			y: number;
+			button?: 'left' | 'middle' | 'right';
+			clickCount?: number;
+			modifiers?: InputModifier[];
+	  }
+	| { type: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }
+	| { type: 'key'; key: string; modifiers?: InputModifier[] }
+	| { type: 'text'; text: string };
 
 export interface DownloadItem {
 	filename: string;

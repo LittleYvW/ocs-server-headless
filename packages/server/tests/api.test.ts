@@ -113,6 +113,26 @@ describe('management API', () => {
 		expect((await request('/api/v1/browsers/' + profile.id, 'DELETE')).status).toBe(204);
 		expect((await request('/api/v1/user-scripts/' + script.id, 'DELETE')).status).toBe(204);
 	});
+	it('validates direct input and requires the existing authentication and origin checks', async () => {
+		const profile = ((await (await request('/api/v1/browsers', 'POST', { name: 'input' })).json()) as any).data;
+		const route = `/api/v1/browsers/${profile.id}`;
+		expect((await fetch(base + route + '/control', { method: 'POST' })).status).toBe(401);
+		expect(
+			(await request(route + '/control', 'POST', { pageId: 'page' }, { Origin: 'https://foreign.test' })).status
+		).toBe(403);
+		expect((await request(route + '/control', 'POST', {})).status).toBe(400);
+		expect((await request(route + '/control', 'POST', { pageId: 'page' })).status).toBe(409);
+		const input = { pageId: 'page', sessionId: 'session', sequence: 1, events: [] };
+		for (const events of [
+			[{ type: 'evaluate', code: 'private' }],
+			[{ type: 'click', x: 1, y: 0 }],
+			[{ type: 'text', text: 'x'.repeat(10001) }]
+		]) {
+			expect((await request(route + '/input', 'POST', { ...input, events })).status).toBe(400);
+		}
+		expect((await request(route + '/input', 'POST', input)).status).toBe(409);
+		expect((await request(route + '/control', 'DELETE', { pageId: 'page' })).status).toBe(400);
+	});
 	it('rejects malformed JSON, unsafe download paths, and missing resources', async () => {
 		const response = await fetch(base + '/api/v1/browsers', { method: 'POST', headers, body: '{' });
 		expect(response.status).toBe(400);

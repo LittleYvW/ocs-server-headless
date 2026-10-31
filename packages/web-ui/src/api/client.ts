@@ -39,6 +39,7 @@ export interface RequestOptions {
 	signal?: AbortSignal;
 	/** Probes pass false so a wrong token does not tear down an existing session. */
 	auth?: boolean;
+	keepalive?: boolean;
 }
 
 async function failure(response: Response): Promise<ApiError> {
@@ -55,7 +56,7 @@ async function failure(response: Response): Promise<ApiError> {
 }
 
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
-	const { method = 'GET', body, signal, auth = true } = options;
+	const { method = 'GET', body, signal, auth = true, keepalive } = options;
 	const headers: Record<string, string> = { Accept: 'application/json' };
 	if (auth && bearer) headers.Authorization = `Bearer ${bearer}`;
 	if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -66,7 +67,8 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
 			headers,
 			body: body === undefined ? undefined : JSON.stringify(body),
 			signal,
-			credentials: 'same-origin'
+			credentials: 'same-origin',
+			keepalive
 		});
 	} catch (error) {
 		if ((error as DOMException | undefined)?.name === 'AbortError') throw error;

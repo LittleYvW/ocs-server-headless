@@ -14,12 +14,16 @@ import { automationDiagnostic } from './automation-diagnostics';
 import { prepareScriptManager, installManagedScripts, hasManagedScripts, isManagerPage } from './manager';
 import { ResourceSampler } from './resource';
 import { Screencast } from './screencast';
+import { BrowserInput } from './browser-input';
+import { ApiError } from './api-error';
 
 let browser: BrowserContext | undefined;
 let starting = false;
 let shuttingDown = false;
 let profileId = '';
 const pages = new Map<string, Page>();
+const automationPages = new Set<Page>();
+const input = new BrowserInput((page) => automationPages.has(page));
 let ocrProxy: Awaited<ReturnType<typeof createOCRProxy>> | undefined;
 let resourceTimer: ReturnType<typeof setTimeout> | undefined;
 let bridge: Awaited<ReturnType<typeof installBrowserBridge>> | undefined;
@@ -248,6 +252,7 @@ async function runAutomation(profile: BrowserProfile) {
 		if (script.needOCR && !ocrProxy?.url) event('automation-warning', { name: script.name, code: 'OCR_UNAVAILABLE' });
 		try {
 			page = await browser.newPage();
+			automationPages.add(page);
 			const defaults = Object.fromEntries(
 				Object.entries(script.configs as Record<string, Config>).map(([key, value]) => [key, value.value])
 			);
@@ -276,6 +281,7 @@ async function runAutomation(profile: BrowserProfile) {
 			onError(error);
 			await page?.close().catch(() => {});
 		} finally {
+			if (page) automationPages.delete(page);
 			if (timer) clearTimeout(timer);
 			script.off('script-error', onError);
 			script.off('script-data', onData);
@@ -311,9 +317,17 @@ async function command(action: BrowserAction, payload: any) {
 	}
 	if (action === 'pages') {
 		return Promise.all(
-			[...pages].map(async ([id, page]) => ({ id, url: page.url(), title: await page.title().catch(() => '') }))
+			[...pages].map(async ([id, page]) => ({
+				id,
+				url: page.url(),
+				title: await page.title().catch(() => ''),
+				automationRunning: automationPages.has(page)
+			}))
 		);
 	}
+	if (action === 'control-start') return input.start(requirePage(payload), payload.pageId);
+	if (action === 'control-stop') return input.stop(payload.pageId, payload.sessionId);
+	if (action === 'input') return input.submit(payload);
 	if (action === 'new-page') {
 		const page = await browser.newPage();
 		try {
@@ -325,6 +339,11 @@ async function command(action: BrowserAction, payload: any) {
 		}
 	}
 	const page = requirePage(payload);
+	if (action === 'screenshot') {
+		const screenshot = await page.screenshot({ type: 'png', timeout: 15000 });
+		return { base64: screenshot.toString('base64'), contentType: 'image/png' };
+	}
+	if (automationPages.has(page)) throw new ApiError(409, 'AUTOMATION_BUSY', 'Automation is running on this page');
 	if (action === 'close-page') {
 		await page.close();
 		return { completed: true };
@@ -333,13 +352,14 @@ async function command(action: BrowserAction, payload: any) {
 		await page.reload({ waitUntil: 'domcontentloaded' });
 		return { id: trackPage(page), url: page.url(), title: await page.title() };
 	}
+	if (action === 'go-back' || action === 'go-forward') {
+		if (action === 'go-back') await page.goBack({ waitUntil: 'domcontentloaded' });
+		else await page.goForward({ waitUntil: 'domcontentloaded' });
+		return { id: trackPage(page), url: page.url(), title: await page.title() };
+	}
 	if (action === 'navigate') {
 		await page.goto(checkedUrl(payload.url), { waitUntil: 'domcontentloaded' });
 		return { id: trackPage(page), url: page.url(), title: await page.title() };
-	}
-	if (action === 'screenshot') {
-		const screenshot = await page.screenshot({ type: 'png', timeout: 15000 });
-		return { base64: screenshot.toString('base64'), contentType: 'image/png' };
 	}
 	if (typeof payload?.selector !== 'string' || !payload.selector || payload.selector.length > 2000) {
 		throw Object.assign(new Error('Invalid selector'), { status: 400, code: 'INVALID_SELECTOR' });
@@ -374,6 +394,7 @@ async function dispose(code = 0) {
 	if (resourceTimer) clearTimeout(resourceTimer);
 	const timer = setTimeout(() => process.exit(code), 5000);
 	try {
+		await input.stop();
 		await screencast.stop();
 		await Promise.all([browser?.close(), ocrProxy?.close(), bridge?.close()]);
 	} catch {
@@ -405,8 +426,13 @@ process.on('message', (message: WorkerRequest) => {
 					message.action === 'start'
 						? 'Browser startup failed; check browser installation and dependencies'
 						: 'Browser operation failed',
-				code: error?.code === 'PAGE_NOT_FOUND' ? 'PAGE_NOT_FOUND' : 'BROWSER_OPERATION_FAILED',
-				status: error?.status === 404 ? 404 : 502
+				code:
+					error instanceof ApiError
+						? error.code
+						: error?.code === 'PAGE_NOT_FOUND'
+						? 'PAGE_NOT_FOUND'
+						: 'BROWSER_OPERATION_FAILED',
+				status: error instanceof ApiError ? error.status : error?.status === 404 ? 404 : 502
 			});
 		}
 	})();

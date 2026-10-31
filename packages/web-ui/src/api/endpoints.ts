@@ -5,6 +5,8 @@ import type {
 	DataImportSummary,
 	BrowserPayload,
 	BrowserView,
+	BrowserControlSession,
+	BrowserInputEvent,
 	DownloadItem,
 	PageInfo,
 	RuntimeState,
@@ -37,6 +39,32 @@ export const api = {
 		action: (id: string, action: 'start' | 'stop' | 'restart') =>
 			request<RuntimeState>(`${base}/browsers/${encodeURIComponent(id)}/${action}`, { method: 'POST' }),
 		pages: (id: string) => request<PageInfo[]>(`${base}/browsers/${encodeURIComponent(id)}/pages`),
+		newPage: (id: string, url?: string) =>
+			request<PageInfo>(`${base}/browsers/${encodeURIComponent(id)}/new-page`, {
+				method: 'POST',
+				body: url ? { url } : {}
+			}),
+		pageAction: (id: string, action: 'close-page' | 'reload' | 'go-back' | 'go-forward', pageId: string) =>
+			request<PageInfo>(`${base}/browsers/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: { pageId } }),
+		startControl: (id: string, pageId: string) =>
+			request<BrowserControlSession>(`${base}/browsers/${encodeURIComponent(id)}/control`, {
+				method: 'POST',
+				body: { pageId },
+				signal: AbortSignal.timeout(10000)
+			}),
+		stopControl: (id: string, session: BrowserControlSession) =>
+			request<{ completed: boolean }>(`${base}/browsers/${encodeURIComponent(id)}/control`, {
+				method: 'DELETE',
+				body: { pageId: session.pageId, sessionId: session.sessionId },
+				keepalive: true,
+				signal: AbortSignal.timeout(5000)
+			}),
+		input: (id: string, session: BrowserControlSession, sequence: number, events: BrowserInputEvent[]) =>
+			request<{ completed: boolean; sequence: number }>(`${base}/browsers/${encodeURIComponent(id)}/input`, {
+				method: 'POST',
+				body: { pageId: session.pageId, sessionId: session.sessionId, sequence, events },
+				signal: AbortSignal.timeout(10000)
+			}),
 		navigate: (id: string, url: string, pageId?: string) =>
 			request<PageInfo>(`${base}/browsers/${encodeURIComponent(id)}/navigate`, {
 				method: 'POST',
