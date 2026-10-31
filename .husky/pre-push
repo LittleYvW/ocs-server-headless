@@ -1,2 +1,2 @@
 # Keep local checks aligned with CI, including the console's separate type checker.
-pnpm lint && pnpm typecheck && pnpm typecheck:web
+exec sh scripts/git-hook.sh pre-push

@@ -136,6 +136,8 @@ docker compose --env-file deploy/.env --file deploy/compose.yaml up --detach --n
 
 开发环境需要 Node.js >=22、pnpm 10.21.0 和 Chromium 系统运行库；Linux 还需要 `util-linux` 提供的 `flock`。可使用 [初始化脚本](scripts/setup.sh)准备工具和构建，系统共享库需按目标发行版安装。
 
+Windows 开发请在 WSL 中准备依赖，也可在 PowerShell 运行 `.\scripts\setup.ps1`。GitHub Desktop 和 Windows Git 的提交、推送钩子会自动在默认 WSL 发行版中执行，并加载初始化脚本生成的工具路径。若依赖安装在其他发行版，可用 `git config --local ocs.hooksWslDistribution <发行版名称>` 指定。推送前仍会检查代码格式和前后端类型，提交时仍会检查提交消息。
+
 ```bash
 pnpm install --frozen-lockfile
 pnpm browser:install

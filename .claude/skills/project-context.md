@@ -100,6 +100,7 @@ setup.sh 用户级安装 Node 和 pnpm、不调用 sudo、不安装 Electron；s
 改动后运行对应测试，再运行必要类型检查与构建；有真实浏览器依赖的行为用 smoke 验证。不要把 mock 测试通过写成真实浏览器验证成功。
 
 pre-push 执行 `pnpm lint && pnpm typecheck && pnpm typecheck:web`，与 CI 的格式及前后端类型检查保持一致。
+commit-msg 与 pre-push 统一通过 scripts/git-hook.sh 执行；Windows Git / GitHub Desktop 自动转交默认 WSL（可用本地 Git 配置 ocs.hooksWslDistribution 指定），Linux/macOS 加载 setup.sh 生成的工具环境。不跳过 commitlint、格式或类型检查，不混用 Windows 与 WSL 的依赖。
 
 默认部署不依赖 GitHub 服务：deploy/install.sh 从源码构建，deploy/compose.yaml 声明构建上下文且默认构建应用镜像；用户可从任意 Git 托管或源码压缩包获取完整源码。Dockerfile 使用固定摘要的 Node Debian base、锁定 Playwright 的 Chromium 和共享库，Compose 使用 named volume、sandbox 与 Chromium seccomp。现有工作流只是可选检查和打包工具，缺失 .github/ 不影响构建启动。scripts/package-container.sh 可手动导出离线包；离线导入需显式运行 install.sh --load-image，说明见 docs/offline-deployment.md。新机器入口见 docs/deployment.md；原生 systemd 示例使用 KillMode=mixed，部署时仍需调整实际路径和服务账号。
 

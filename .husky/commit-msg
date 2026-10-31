@@ -1,1 +1,1 @@
-npx --no -- commitlint --edit $1
+exec sh scripts/git-hook.sh commit-msg "$1"
