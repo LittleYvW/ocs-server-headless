@@ -3,7 +3,8 @@
 面向 Linux 服务器的无头浏览器自动化服务，提供同源 Web 控制台和管理 API。浏览器在服务端运行，无需桌面会话；关闭控制台不会中断正在运行的实例。
 
 - 独立浏览器实例、用户目录和 worker，支持启动、停止与重启。
-- 内置自动化程序、普通 JavaScript 用户脚本，以及页面导航、填写、点击、截图和下载。
+- 内置自动化、普通 JavaScript 和标准用户脚本，支持网络/文件导入、版本更新与脚本管理器安装。
+- OCS 配置同步、软件辅助动作、可配置 OCR、实时预览、资源监测和加密数据导入导出。
 - 管理令牌认证、实时事件流、加密配置和持久化浏览器数据。
 
 ![控制台概览](docs/images/console-overview.png)
@@ -68,6 +69,9 @@ ssh -L 15319:127.0.0.1:15319 user@server
 | `OCS_PORT` | `15319` | 宿主端口 |
 | `OCS_MAX_BROWSERS` | `4` | 同时运行的浏览器实例上限 |
 | `OCS_ALLOWED_ORIGINS` | 空 | 逗号分隔的精确 Origin；HTTPS 反向代理需设置外部 Origin |
+| `OCS_OCR_URL` | 空 | 容器可访问的兼容 OCR 服务地址 |
+| `OCS_SCRIPT_MANAGER_URL` | 空 | 可选脚本管理器 ZIP 镜像 |
+| `OCS_MIN_FREE_MEMORY_MB` / `OCS_MAX_CPU_PERCENT` | `0` | 启动资源阈值；0 表示关闭该项检查 |
 
 仅修改配置时，在 `deploy/` 执行以下命令，使用已有镜像重新创建服务：
 
@@ -150,7 +154,11 @@ OCS_DATA_DIR="$PWD/data" pnpm dev
 | `pnpm lint` | 检查代码格式 |
 | `pnpm test` | 共享包、API、数据锁与进程监管测试 |
 | `pnpm smoke` | 真实无头 Chromium 端到端验证 |
+| `pnpm test:browser` | OCS 桥接、配置同步及实时预览的真实浏览器验证 |
+| `pnpm test:managed-scripts` | ScriptCat 安装、GM 存储、开关对账与完整管理 API 验证 |
 | `pnpm test:web` | 控制台端到端检查，需先构建后端和前端 |
+
+标准脚本、OCR、数据迁移及验证方式见 [后端兼容功能](docs/backend-compatibility.md)。
 
 前端开发代理与接口说明见 [Web 控制台文档](docs/web-ui.md)和 [API 文档](docs/api.md)。
 
@@ -168,8 +176,9 @@ docs/                 部署、API 和控制台文档
 当前 workspace 包含 `common`、`server` 和 `web-ui`。控制台由后端同源托管；原生 Node.js 部署时需单独执行 `pnpm build:web`，仅执行 `pnpm build` 不会生成控制台。默认 Docker 构建已包含这一步。
 
 - 管理令牌为单管理员权限，当前不提供多用户、角色或租户隔离。
-- 用户脚本是普通 JavaScript，不实现 `GM_*`，依赖油猴 / 脚本猫的脚本需单独适配。
-- 支持管理员指定本地解包的 MV3 扩展；不提供扩展商店安装或本地 OCR 二进制。
-- 不自动导入原桌面客户端数据，也不兼容旧桌面 IPC 接口。
+- 用户脚本分为普通 JS 和标准 `.user.js`。标准脚本由 MV3 脚本管理器执行，支持其提供的 `GM_*`、`@require` 和元数据规则；首次需要管理器时自动下载并校验固定版本 ScriptCat，缓存于数据目录。可通过 `OCS_EXTENSIONS` 使用已有的 ScriptCat 1.5 管理器，或用 `OCS_SCRIPT_MANAGER_URL` 指定 ZIP 镜像。
+- OCR 通过 `OCS_OCR_URL` 接入兼容的 JSON 服务，不内置平台专属 OCR 二进制；未配置时仍可执行无验证码的登录。
+- 设置页支持密码加密的 `.ocsdata` 导出及本项目/桌面格式导入；旧桌面本地路径脚本无法跨机恢复，会给出跳过提示。
+- 不兼容桌面 IPC；OCS 脚本的配置/动作桥接在受管浏览器内部提供，不向外暴露旧的无鉴权接口。
 
 本项目由 [OCS Desktop](https://github.com/ocsjs/ocs-desktop) fork，原作者与 MIT 许可证信息见 [来源说明](NOTICE.md)。旧桌面模块、升级器和桌面发布流程已移除，需要参考时可查阅 Git 历史。上游变更的适用性和移植记录见 [上游同步记录](docs/upstream-sync.md)。服务端版本独立于桌面版本维护。

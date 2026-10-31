@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import AppIcon from '@/components/AppIcon.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import PageHead from '@/components/PageHead.vue';
 import StatusMark from '@/components/StatusMark.vue';
 import { feed } from '@/stores/events';
-import { isPending, runAction, service } from '@/stores/service';
-import { eventLabel, eventSummary, formatClock, relativeTime, shortId } from '@/lib/format';
+import { isPending, refreshBrowsers, refreshSystem, runAction, service } from '@/stores/service';
+import { eventLabel, eventSummary, formatBytes, formatClock, relativeTime, shortId } from '@/lib/format';
 
 const router = useRouter();
 
@@ -20,6 +20,20 @@ const slots = computed(() => Array.from({ length: Math.min(capacity.value || 4, 
 const enabledScripts = computed(() => service.scripts.filter((item) => item.enabled).length);
 const atCapacity = computed(() => capacity.value > 0 && running.value >= capacity.value);
 const recentEvents = computed(() => feed.items.slice(-7).reverse());
+const host = computed(() => service.system?.resources);
+const browserMemory = computed(() =>
+	service.browsers
+		.filter((browser) => browser.runtime.status === 'running')
+		.reduce((sum, browser) => sum + (browser.runtime.resources?.memoryMB || 0), 0)
+);
+let resourceTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+	resourceTimer = setInterval(() => {
+		void refreshSystem(true);
+		void refreshBrowsers(true);
+	}, 10000);
+});
+onBeforeUnmount(() => clearInterval(resourceTimer));
 
 function quickAction(id: string, status: string): void {
 	if (status === 'running') void runAction(id, 'stop');
@@ -92,6 +106,42 @@ function createInstance(): void {
 		</div>
 	</section>
 
+	<section
+		v-if="host"
+		class="panel host-panel"
+	>
+		<header class="panel__head">
+			<span class="panel__title">服务端资源</span><span class="dim small">每 10 秒刷新</span>
+		</header>
+		<div class="host-metrics">
+			<div>
+				<span>可用内存 / 总内存</span
+				><strong class="mono"
+					>{{ formatBytes(host.freeMemoryMB * 1024 * 1024) }} /
+					{{ formatBytes(host.totalMemoryMB * 1024 * 1024) }}</strong
+				>
+			</div>
+			<div>
+				<span>运行中浏览器内存</span><strong class="mono">{{ formatBytes(browserMemory * 1024 * 1024) }}</strong>
+			</div>
+			<div>
+				<span>CPU 核心</span><strong class="mono">{{ host.cpuCount }}</strong>
+			</div>
+			<div>
+				<span>系统负载 · 1 / 5 / 15 分钟</span
+				><strong class="mono">{{ host.loadAverage.map((value) => value.toFixed(2)).join(' / ') }}</strong>
+			</div>
+		</div>
+		<footer class="panel__foot">
+			<span>实例 CPU 统计包含浏览器子进程，多核并行可超过 100%。</span
+			><span
+				v-if="service.system?.resourcePolicy?.minFreeMemoryMB"
+				class="mono"
+				>启动预留 {{ service.system.resourcePolicy.minFreeMemoryMB }} MB</span
+			>
+		</footer>
+	</section>
+
 	<div class="grid-split">
 		<div class="stack gap-16 overview-left">
 			<section class="panel">
@@ -143,6 +193,12 @@ function createInstance(): void {
 						<div class="instance-row__meta">
 							<span class="mono">{{ shortId(item.id) }}</span>
 							<span>{{ relativeTime(item.updatedAt) }}</span>
+							<span
+								v-if="item.runtime.status === 'running' && item.runtime.resources"
+								class="mono"
+								>{{ item.runtime.resources.memoryMB.toFixed(1) }} MB · CPU
+								{{ item.runtime.resources.cpuPercent.toFixed(1) }}%</span
+							>
 						</div>
 						<button
 							type="button"
@@ -288,6 +344,27 @@ function createInstance(): void {
 </template>
 
 <style scoped>
+.host-panel {
+	margin-bottom: 18px;
+}
+.host-metrics {
+	display: grid;
+	grid-template-columns: 1.4fr 1fr 0.5fr 1.2fr;
+	gap: 18px;
+	padding: 18px;
+}
+.host-metrics > div {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	color: var(--text-3);
+	font-size: 11px;
+}
+.host-metrics strong {
+	color: var(--text-1);
+	font-size: 12px;
+	font-weight: 400;
+}
 .panel__link {
 	display: inline-flex;
 	align-items: center;
@@ -443,6 +520,9 @@ function createInstance(): void {
 }
 
 @media (max-width: 560px) {
+	.host-metrics {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
 	.instance-row {
 		grid-template-columns: 14px minmax(0, 1fr) 30px;
 	}

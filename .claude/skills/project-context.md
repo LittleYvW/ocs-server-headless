@@ -42,7 +42,9 @@
 
 程序通过 `script.run(page, configs平铺值, 可选OCR选项)` 执行；配置定义沿用 common 的 `Config`。部分旧程序通过 `script-error` 事件报告失败，worker 监听该事件并输出结构化结果。每实例独立进程使共享程序实例的事件监听隔离。
 
-当前没有动态第三方服务端自动化 loader、权限沙箱或任意上传 Node 代码执行接口。用户脚本是普通 JavaScript，在匹配页面 / frame 的 DOMContentLoaded 注入，仅 `*` 是全 URL 通配符，不实现 GM_*、@require 或油猴 / 脚本猫安装器。管理员可通过 OCS_EXTENSIONS 指定本地解包 MV3 扩展路径；清单必须是普通文件，不提供扩展商店安装流程。OCR 后端未迁移；自动化定义返回布尔 needOCR，控制台提示限制，worker 发布 automation-warning / OCR_UNAVAILABLE 后继续运行，不阻止无验证码的登录。
+当前没有动态第三方 Node 自动化 loader。用户脚本支持旧 plain 模式及标准 userscript 模式；后者通过 manager.ts 下载/缓存固定版本 ScriptCat（或管理员本地MV3管理器）、自动安装及同步受管脚本，GM API和元数据执行交给管理器。userscript-source.ts负责有界网络获取/元数据，userscripts.ts负责CRUD/导入/更新，catalog.ts提供官方与脚本源查询。
+
+browser-bridge.ts提供实例内OCS配置和动作白名单桥接，凭据与管理token隔离；settings保存后通过update-ocs实时同步。ocr.ts通过OCS_OCR_URL接入兼容服务，并通过私有loopback随机路径把第三参数传给内置自动化；未配置时继续无验证码流程。screencast.ts提供背压控制的CDP实时帧，runtime私有订阅转MJPEG，不进入事件日志。resource.ts报告资源并支持启动阈值；transfer.ts支持密码加密导出及新旧格式导入；storage.ts在停止状态清理固定受管路径。
 
 ## HTTP 契约
 
@@ -57,7 +59,7 @@
 - 自动化配置按服务器内置定义校验。password 字段读取脱敏为 `***`，提交 `***` 保留旧密码；若提交自动化数组，省略的具体配置项回默认值。完全省略 automationScripts 才保留旧数组。
 - settings.ocs 更新是对象整体替换。运行时环境、token、密钥、浏览器与扩展路径不可通过 API 修改。
 - SSE 通过带 Bearer 的 fetch 流消费；重连后重新同步实例状态。事件缓存有限且服务重启后序号重置，不是任务数据库。
-- 只提供 pages / navigate / click / fill / screenshot 等明确动作，不添加任意 eval、CDP、fs、shell 透传。
+- 提供 pages / navigate / click / fill / screenshot / new-page / close-page / reload / press / check / select 等明确动作，不添加任意 eval、CDP、fs、shell 透传。
 
 不要在事件、错误或普通日志中写入密码、管理令牌、填充值或整个浏览器启动配置。页面截图、profile、下载和日志仍应视作私密数据。
 
@@ -106,7 +108,7 @@ pre-push 执行 `pnpm lint && pnpm typecheck && pnpm typecheck:web`，与 CI 的
 Web 控制台已实现于 `packages/web-ui`，不依赖 Electron、桌面 IPC 或 Node 核心模块。它对接现有 `/api/v1`，完成单管理员令牌认证、实例 CRUD 与启停、自动化配置表单、页面截图与受限操作、下载、用户脚本、`settings.ocs` 和 SSE 恢复。
 
 - 令牌默认仅在会话存储；可选 localStorage，并在设置页明确展示与清除。令牌只走 `Authorization` 头，SSE 使用 fetch 流。
-- 页面操作仍只有导航、点击、填写与截图；不新增任意 JS、CDP、文件系统或 Node 入口。
+- 页面支持受限明确操作、截图和MJPEG实时预览，不新增任意 JS、CDP、文件系统或 Node 入口。
 - 自动化配置由服务端定义生成，密码 `***` 保持原值；`settings.ocs` 按整体替换提交。
 - 视觉采用深色灵动线条：近黑底、发丝线、细线图标与单一强调色，克制使用渐变、光效和解释性文本；实现与约束见 `docs/web-ui.md`。
 - `pnpm build:web` 输出到 `packages/server/web`，服务端可选同源托管；后端构建、测试和运行不依赖前端产物。

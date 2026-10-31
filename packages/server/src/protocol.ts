@@ -1,6 +1,21 @@
 import type { BrowserProfile, UserScript } from './types';
 
-export type BrowserAction = 'pages' | 'navigate' | 'screenshot' | 'click' | 'fill';
+export type BrowserAction =
+	| 'pages'
+	| 'navigate'
+	| 'screenshot'
+	| 'click'
+	| 'fill'
+	| 'new-page'
+	| 'close-page'
+	| 'reload'
+	| 'press'
+	| 'check'
+	| 'select'
+	| 'update-ocs'
+	| 'screencast-start'
+	| 'screencast-stop'
+	| 'screencast-ack';
 
 export interface WorkerStart {
 	profile: BrowserProfile;
@@ -8,6 +23,9 @@ export interface WorkerStart {
 	dataDir: string;
 	executablePath?: string;
 	extensions: string[];
+	ocs?: Record<string, unknown>;
+	ocrUrl?: string;
+	scriptManagerUrl?: string;
 }
 
 export type WorkerRequest = {

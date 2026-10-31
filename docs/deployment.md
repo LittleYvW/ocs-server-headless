@@ -136,3 +136,9 @@ bash scripts/test-container.sh ocs-server-headless:local
 若目标机器无法访问构建下载源，可在另一台联网机器从源码构建，再手动导出镜像。这个可选流程见 [离线部署](offline-deployment.md)。已有工作流仅用于可选检查和打包；没有自动构建服务也可使用仓库中的全部本地命令。
 
 Compose 构建行为参见 [Docker 构建规范](https://docs.docker.com/reference/compose-file/build/)，启动参数参见 [docker compose up](https://docs.docker.com/reference/cli/docker/compose/up/)。
+
+## 标准脚本、OCR 与资源检查
+
+标准脚本首次使用时下载固定版本 ScriptCat 并校验 SHA-256，缓存于数据卷 `extensions/`。已有 ScriptCat 1.5 解包目录可通过 `OCS_EXTENSIONS` 配置，路径必须是容器内绝对路径（例如 `/data/extensions/scriptcat`）。`OCS_SCRIPT_MANAGER_URL` 可配置 ZIP 镜像，避免部署网络无法访问官方源。
+
+`OCS_OCR_URL` 是容器可访问的 JSON OCR 地址；宿主的 `127.0.0.1` 不等于容器的宿主网络。`OCS_MIN_FREE_MEMORY_MB` 和 `OCS_MAX_CPU_PERCENT` 配置启动阈值，0 关闭该项检查。`/api/v1/browsers/:id/preview` 同 SSE 一样需要反向代理关闭缓冲。完整契约见 [API](api.md) 和 [兼容功能说明](backend-compatibility.md)。

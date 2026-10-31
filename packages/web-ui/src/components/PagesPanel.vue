@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppIcon from '@/components/AppIcon.vue';
 import BaseButton from '@/components/BaseButton.vue';
 import BaseSwitch from '@/components/BaseSwitch.vue';
+import LivePreview from '@/components/LivePreview.vue';
 import { api } from '@/api/endpoints';
 import { describeError } from '@/api/errors';
 import { normalizeUrl } from '@/lib/config';
@@ -555,6 +556,11 @@ onBeforeUnmount(() => {
 			<p class="ops__note">填充内容仅提交到当前页面，不会写入事件记录或客户端日志。</p>
 		</div>
 	</section>
+	<LivePreview
+		v-if="running()"
+		:browser-id="browser.id"
+		:page-id="selectedId"
+	/>
 </template>
 
 <style scoped>

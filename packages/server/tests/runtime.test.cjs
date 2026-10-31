@@ -13,9 +13,14 @@ function setup(t, overrides = {}) {
 		`let mode = '';
 		process.on('SIGTERM', () => { if (mode !== 'hang-stop') process.exit(0); });
 		process.on('message', message => {
+			if (message.action === 'update-ocs') {
+				require('node:fs').writeFileSync(__dirname + '/ocs-config', JSON.stringify(message.payload.ocs));
+				return process.send({ id: message.id, ok: true });
+			}
 			if (message.action === 'start') {
 				mode = message.payload.profile.name;
 				if (mode === 'hang-start') return;
+				if (mode === 'slow-start') return setTimeout(() => process.send({ id: message.id, ok: true }), 60);
 				if (mode === 'fail-start') return process.send({ id: message.id, ok: false, error: 'Start failed', code: 'FAILED', status: 502 });
 				return process.send({ id: message.id, ok: true });
 			}
@@ -133,4 +138,36 @@ test('command timeouts do not leave pending requests and shutdown prevents new l
 test('rejects browser IDs that could escape the profile root', async (t) => {
 	const { runtime } = setup(t);
 	await assert.rejects(runtime.start(profile('../escape'), []), { code: 'INVALID_ID' });
+});
+
+test('applies configuration saved during startup before reporting running', async (t) => {
+	const { runtime, dataDir } = setup(t);
+	const startup = runtime.start(profile('browser-1', 'slow-start'), [], { openSync: true, store: { old: true } });
+	await runtime.syncOCS({ openSync: true, store: { updated: true } });
+	await startup;
+	assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, 'ocs-config'), 'utf8')), {
+		openSync: true,
+		store: { updated: true }
+	});
+});
+
+test('stop during resource sampling cancels startup without spawning a worker', async (t) => {
+	const { runtime } = setup(t, { maxCpuPercent: 100 });
+	const startup = runtime.start(profile(), []);
+	const rejected = assert.rejects(startup, { code: 'START_CANCELLED' });
+	assert.equal((await runtime.stop('browser-1')).status, 'stopped');
+	await rejected;
+	assert.equal(runtime.get('browser-1').pid, undefined);
+	assert.equal((await runtime.start(profile('browser-2'), [])).status, 'running');
+});
+
+test('saving settings concurrently with stop does not report a failed save', async (t) => {
+	const { runtime, events } = setup(t);
+	await runtime.start(profile(), []);
+	await Promise.all([runtime.syncOCS({ openSync: true, store: { changed: true } }), runtime.stop('browser-1')]);
+	assert.equal(runtime.get('browser-1').status, 'stopped');
+	assert.equal(
+		events.some((event) => event.type === 'settings.sync-warning'),
+		false
+	);
 });

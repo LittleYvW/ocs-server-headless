@@ -9,7 +9,7 @@
 - 深色近黑底、1px 发丝线、细线图标；单一薄荷绿强调色，状态色只用于运行、警告与错误。
 - 全站不使用渐变、发光、投影或玻璃拟态。背景是 24 条低透明度流线与 2 段游走亮线组成的 Canvas；`prefers-reduced-motion` 下静态绘制，标签页隐藏时停止绘制。
 - 动效只用于状态变化、线条绘制与页面切换：状态过渡约 120–300ms，线条绘制不超过 800ms；持续流动的 Canvas 与状态脉冲只作低强度反馈。
-- 文本克制：只保留不可省略的约束，例如密码 `***`、不支持 `GM_*`、`settings.ocs` 整体替换、来源被拒绝、填充内容不回显；其余信息用数字、状态点、标签与结构表达。
+- 文本克制：只保留不可省略的约束，例如密码 `***`、脚本运行模式、`settings.ocs` 整体替换、来源被拒绝、填充内容不回显；其余信息用数字、状态点、标签与结构表达。
 - 响应式：`<=900px` 侧栏折叠为双行顶部导航，表格移除次要列；`<=560px` 标题与操作改为纵向。
 
 ![实例详情](images/console-instance.png)
@@ -48,7 +48,9 @@ tests/console.e2e.cjs   真实浏览器端到端检查
 - SSE 重连携带 `Last-Event-ID`；45 秒无数据视为断线。退避从 700ms 指数增长，上限 15 秒。重连后重新同步实例、脚本与近期日志。本地最多保留 400 条，按时间与事件 ID 去重。
 - 截图与下载使用带 Bearer 的 `fetch` 转 Blob。截图轮询只在实例运行、页面可见且用户未暂停时执行；切换页面、实例或离开视图会取消请求并释放 Object URL。
 - 自动化表单由 `/automation-scripts` 的配置定义生成，支持 `visibleWhen`、必填、长度/范围、选项与开关。密码读取为 `***`，未点击“修改”时按原值提交。
-- 设置页按整体替换语义提交 `settings.ocs`，提交前校验 JSON 对象。
+- 设置页按整体替换语义提交 `settings.ocs` 并同步到实例，提交前校验 JSON 对象；支持密码加密导出和确认后导入。
+- 实例支持分组、标签、备注；存储页可统计空间并在停止状态确认清理缓存、profile 或下载。
+- 实时预览通过带 Bearer 的 fetch 读取 MJPEG，切换页面/实例、停止或离开视图时取消并释放帧 URL；画面不进入 SSE 日志。
 
 ## 开发
 
@@ -77,7 +79,7 @@ pnpm dev:web
 - 后端启动时若 `OCS_WEB_DIR`（默认 `packages/server/web`）存在 `index.html`，在 `/` 提供控制台；不存在时保持纯 API 行为。`pnpm build` 不构建前端。
 - 使用 hash 路由，不需要 SPA 重写；未知路径仍是 JSON 404。
 - 服务端为 HTML 设置专用 CSP：`default-src 'self'`、`img-src 'self' blob: data:`、`style-src 'self' 'unsafe-inline'`、`script-src 'self'`。`index.html` 不缓存，哈希资源长期缓存。
-- 推荐同源反向代理：页面与 `/api` 使用同一域名。为 `/api/v1/events` 关闭代理缓冲并保持长连接；后端已返回 `X-Accel-Buffering: no`。
+- 推荐同源反向代理：页面与 `/api` 使用同一域名。为 `/api/v1/events` 和实例的 `/preview` 关闭代理缓冲并保持长连接；后端已返回 `X-Accel-Buffering: no`。
 - 服务端 CSP 的 `connect-src` 为 `'self'`，因此由本服务托管的控制台只应使用同源 API。如果控制台与 API 分离部署，需要由控制台托管方设置允许 API 源的 CSP，精确配置 `OCS_ALLOWED_ORIGINS`，并通过 `VITE_API_BASE` 构建。不要把令牌放进 URL。
 
 ## 测试
@@ -87,6 +89,8 @@ pnpm build
 pnpm build:web
 pnpm test:web
 ```
+
+`pnpm test:web` 串行执行 `console.e2e.cjs`、`userscripts.e2e.cjs` 与 `management.e2e.cjs`。后两项覆盖脚本源/文件导入、版本更新/固定版本、源码下载、加密迁移、存储清理及实时预览。
 
 `tests/console.e2e.cjs` 启动临时后端与本地页面 fixture，用真实浏览器覆盖：无效令牌、会话 / 记住令牌存储、SSE 中断重连、用户脚本创建、条件字段、实例创建、启动/重启/停止、截图、填写/点击、导航、下载、自动化结果、事件展开、`settings.ocs` 整体替换、退出登录与来源 403。
 
@@ -101,6 +105,6 @@ OCS_E2E_BROWSER=/绝对路径/chrome pnpm test:web
 ## 边界
 
 - 单管理员令牌，没有角色或租户隔离。
-- 不提供任意 JS、CDP、文件系统或 Node 执行入口；页面操作只有导航、点击、填写与截图。
-- 不实现 `GM_*`、脚本管理器安装器、扩展商店或 OCR。
+- 提供明确的页面动作、截图和带认证的实时预览，不提供任意 JS、CDP、文件系统或 Node 执行入口。
+- 普通 JS 保持原有注入行为；标准脚本交给 ScriptCat 提供 GM API。控制台支持 URL/文件/脚本源导入及版本更新，OCR 按服务配置显示可用状态，不提供扩展商店。
 - 事件缓存不是任务数据库；服务重启后序号重新开始，以重新同步结果为准。

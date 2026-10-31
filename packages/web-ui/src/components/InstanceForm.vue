@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { service } from '@/stores/service';
 import { computed, reactive, ref, watch } from 'vue';
 import AppIcon from '@/components/AppIcon.vue';
 import BaseButton from '@/components/BaseButton.vue';
@@ -26,6 +27,9 @@ interface DraftEntry {
 }
 
 const name = ref('');
+const group = ref('');
+const tagsText = ref('');
+const notes = ref('');
 const startUrl = ref('');
 const entries = ref<DraftEntry[]>([]);
 const scriptIds = ref<string[]>([]);
@@ -45,6 +49,9 @@ function definitionOf(entryName: string): AutomationDefinition | undefined {
 
 function reset(): void {
 	name.value = props.profile?.name || '';
+	group.value = props.profile?.group || '';
+	tagsText.value = (props.profile?.tags || []).join(', ');
+	notes.value = props.profile?.notes || '';
 	startUrl.value = props.profile?.startUrl || 'https://example.com/';
 	scriptIds.value = [...(props.profile?.userScriptIds || [])];
 	entries.value = (props.profile?.automationScripts || [])
@@ -169,6 +176,12 @@ async function submit(): Promise<void> {
 	try {
 		const saved = await saveBrowser(props.profile?.id || null, {
 			name: name.value.trim(),
+			group: group.value.trim(),
+			tags: tagsText.value
+				.split(/[,，]/)
+				.map((tag) => tag.trim())
+				.filter(Boolean),
+			notes: notes.value,
 			startUrl: normalizeUrl(startUrl.value),
 			automationScripts: entries.value.map((entry) => ({ name: entry.name, configs: entry.configs })),
 			userScriptIds: [...scriptIds.value]
@@ -245,6 +258,33 @@ async function submit(): Promise<void> {
 				</label>
 			</div>
 
+			<div class="form-grid">
+				<label class="field"
+					><span class="field__label">分组</span
+					><span class="field__control"
+						><input
+							v-model="group"
+							maxlength="500"
+							placeholder="例如：课程 / 第一组" /></span
+				></label>
+				<label class="field"
+					><span class="field__label">标签</span
+					><span class="field__control"
+						><input
+							v-model="tagsText"
+							maxlength="3030"
+							placeholder="多个标签用逗号分隔" /></span
+				></label>
+			</div>
+			<label class="field"
+				><span class="field__label">备注</span
+				><span class="field__control">
+					<textarea
+						v-model="notes"
+						maxlength="10000"
+						rows="2"
+					></textarea></span
+			></label>
 			<div class="divider"></div>
 
 			<section class="form-section">
@@ -326,7 +366,9 @@ async function submit(): Promise<void> {
 							class="dim small"
 							role="note"
 						>
-							此程序可能需要验证码识别。当前服务未提供 OCR，遇到验证码时登录可能失败。
+							此程序可能需要验证码识别。{{
+								service.system?.ocrAvailable ? '服务已配置 OCR。' : '尚未配置 OCR，遇到验证码时登录可能失败。'
+							}}
 						</p>
 
 						<div class="auto-block__fields">
@@ -469,7 +511,9 @@ async function submit(): Promise<void> {
 				<header class="form-section__head">
 					<div>
 						<span class="panel__title">用户脚本关联</span>
-						<p class="field__hint">仅启用且 URL 匹配的普通 JavaScript 脚本会注入页面，不支持 GM_*。</p>
+						<p class="field__hint">
+							仅启用的关联脚本会运行；普通 JS 按 URL 匹配注入，标准用户脚本由管理器提供 GM API 并按元数据执行。
+						</p>
 					</div>
 				</header>
 				<p

@@ -8,12 +8,44 @@ import { Script } from 'node:vm';
 import type { BrowserProfile } from './types';
 import type { BrowserAction, WorkerRequest, WorkerResponse, WorkerStart } from './protocol';
 import { validateExtensions } from './extensions';
+import { installBrowserBridge } from './browser-bridge';
+import { createOCRProxy } from './ocr';
+import { automationDiagnostic } from './automation-diagnostics';
+import { prepareScriptManager, installManagedScripts, hasManagedScripts, isManagerPage } from './manager';
+import { ResourceSampler } from './resource';
+import { Screencast } from './screencast';
 
 let browser: BrowserContext | undefined;
 let starting = false;
 let shuttingDown = false;
 let profileId = '';
 const pages = new Map<string, Page>();
+let ocrProxy: Awaited<ReturnType<typeof createOCRProxy>> | undefined;
+let resourceTimer: ReturnType<typeof setTimeout> | undefined;
+let bridge: Awaited<ReturnType<typeof installBrowserBridge>> | undefined;
+const screencast = new Screencast(
+	(frame) => event('screencast-frame', { ...frame }),
+	(pageId) => event('screencast-ended', { pageId })
+);
+
+function reportResources() {
+	const sampler = new ResourceSampler();
+	const sample = async () => {
+		if (!browser || shuttingDown) return;
+		try {
+			const { memoryMB, cpuPercent, cpuTime } = await sampler.sample(browser);
+			if (!shuttingDown) event('resource-usage', { memoryMB, cpuPercent, cpuTime });
+		} catch {
+			event('resource-warning', { code: 'RESOURCE_SAMPLE_FAILED' });
+		} finally {
+			if (!shuttingDown) {
+				resourceTimer = setTimeout(() => void sample(), 10000);
+				resourceTimer.unref();
+			}
+		}
+	};
+	void sample();
+}
 
 function send(message: WorkerResponse) {
 	if (process.connected) process.send?.(message, () => {});
@@ -73,8 +105,20 @@ async function start(options: WorkerStart) {
 	mkdirSync(profilePath, { recursive: true, mode: 0o700 });
 	mkdirSync(downloadsPath, { recursive: true, mode: 0o700 });
 	mkdirSync(stagingPath, { recursive: true, mode: 0o700 });
-	validateExtensions(options.extensions);
-	const extensionList = options.extensions.join(',');
+	const enabledScripts = options.scripts.filter(
+		(script) => script.enabled && options.profile.userScriptIds.includes(script.id)
+	);
+	const managedScripts = enabledScripts.filter((script) => script.mode === 'userscript');
+	const reconcileManager = managedScripts.length > 0 || hasManagedScripts(options.dataDir, profileId);
+	const extensions = reconcileManager
+		? await prepareScriptManager({
+				dataDir: options.dataDir,
+				extensions: options.extensions,
+				managerUrl: options.scriptManagerUrl
+		  })
+		: options.extensions;
+	validateExtensions(extensions);
+	const extensionList = extensions.join(',');
 	browser = await chromium.launchPersistentContext(profilePath, {
 		channel: 'chromium',
 		headless: true,
@@ -89,10 +133,8 @@ async function start(options: WorkerStart) {
 		handleSIGTERM: false,
 		handleSIGHUP: false,
 		timeout: 30000,
-		ignoreDefaultArgs: options.extensions.length ? ['--disable-extensions'] : undefined,
-		args: options.extensions.length
-			? [`--disable-extensions-except=${extensionList}`, `--load-extension=${extensionList}`]
-			: []
+		ignoreDefaultArgs: extensions.length ? ['--disable-extensions'] : undefined,
+		args: extensions.length ? [`--disable-extensions-except=${extensionList}`, `--load-extension=${extensionList}`] : []
 	});
 	if (shuttingDown) {
 		await browser.close();
@@ -114,10 +156,11 @@ async function start(options: WorkerStart) {
 		trackPage(page);
 		watchDownloads(page, downloadsPath);
 	}
+	bridge = await installBrowserBridge(browser, options.ocs);
+	ocrProxy = await createOCRProxy(options.ocrUrl);
+	reportResources();
 
-	const scripts = options.scripts.filter(
-		(script) => script.enabled && options.profile.userScriptIds.includes(script.id)
-	);
+	const scripts = enabledScripts.filter((script) => script.mode !== 'userscript');
 	await browser.exposeBinding('__ocsUserScriptResult', (_source, scriptId: unknown, failed: unknown) => {
 		if (typeof scriptId !== 'string' || !scripts.some((script) => script.id === scriptId)) return;
 		event('userscript-result', { scriptId, status: failed ? 'error' : 'completed' });
@@ -139,6 +182,15 @@ async function start(options: WorkerStart) {
 			})();`
 		});
 	}
+	if (reconcileManager) {
+		await installManagedScripts(browser, {
+			scripts: managedScripts,
+			dataDir: options.dataDir,
+			profileId,
+			onEvent: event,
+			backgroundUrl: await bridge?.backgroundUrl()
+		});
+	}
 	const firstPage = browser.pages()[0] || (await browser.newPage());
 	await firstPage.goto(checkedUrl(options.profile.startUrl), { waitUntil: 'domcontentloaded' });
 	starting = false;
@@ -149,6 +201,7 @@ async function start(options: WorkerStart) {
 
 function watchDownloads(page: Page, directory: string) {
 	page.on('download', (download) => {
+		if (isManagerPage(page)) return;
 		void (async () => {
 			const original = path.basename(download.suggestedFilename()).replace(/[\x00-\x1f<>:"/\\|?*]/g, '_');
 			const filename = `${randomUUID()}--${original.slice(0, 160) || 'download'}`;
@@ -174,12 +227,25 @@ async function runAutomation(profile: BrowserProfile) {
 		let page: Page | undefined;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let failed = false;
-		const onError = () => {
+		let failureCode: string | undefined;
+		const onError = (...messages: unknown[]) => {
 			failed = true;
+			const diagnostic = automationDiagnostic(
+				messages.find((message) => typeof message === 'string' || message instanceof Error)
+			);
+			failureCode = diagnostic.code;
+			event('automation-diagnostic', { name: script.name, level: 'error', ...diagnostic });
 		};
+		const onData = () =>
+			event('automation-data', {
+				name: script.name,
+				code: 'AUTOMATION_PROGRESS',
+				message: 'Automation reported progress'
+			});
 		script.on('script-error', onError);
+		script.on('script-data', onData);
 		event('automation-started', { name: script.name });
-		if (script.needOCR) event('automation-warning', { name: script.name, code: 'OCR_UNAVAILABLE' });
+		if (script.needOCR && !ocrProxy?.url) event('automation-warning', { name: script.name, code: 'OCR_UNAVAILABLE' });
 		try {
 			page = await browser.newPage();
 			const defaults = Object.fromEntries(
@@ -188,30 +254,85 @@ async function runAutomation(profile: BrowserProfile) {
 			let configs = { ...defaults, ...configured.configs };
 			if (legacy) configs = legacy.migrate(configs);
 			await Promise.race([
-				Promise.resolve(script.run(page, configs)),
+				Promise.resolve(
+					script.run(
+						page,
+						configs,
+						ocrProxy?.url
+							? {
+									ocrApiUrl: ocrProxy.url,
+									ocrApiImageKey: 'image',
+									detBackgroundKey: 'det_bg',
+									detTargetKey: 'det_target'
+							  }
+							: undefined
+					)
+				),
 				new Promise<never>((_resolve, reject) => {
 					timer = setTimeout(() => reject(new Error('Automation timed out')), 45000);
 				})
 			]);
-		} catch {
-			failed = true;
+		} catch (error) {
+			onError(error);
 			await page?.close().catch(() => {});
 		} finally {
 			if (timer) clearTimeout(timer);
 			script.off('script-error', onError);
-			event('automation-result', { name: script.name, status: failed ? 'error' : 'completed' });
+			script.off('script-data', onData);
+			event('automation-result', {
+				name: script.name,
+				status: failed ? 'error' : 'completed',
+				...(failureCode ? { code: failureCode } : {})
+			});
 		}
 	}
 }
 
 async function command(action: BrowserAction, payload: any) {
 	if (!browser || shuttingDown) throw new Error('Browser is unavailable');
+	if (action === 'screencast-start') {
+		const page = requirePage(payload);
+		await screencast.start(page, trackPage(page), payload);
+		return { completed: true };
+	}
+	if (action === 'screencast-stop') {
+		await screencast.stop();
+		return { completed: true };
+	}
+	if (action === 'screencast-ack') {
+		await screencast.acknowledge(payload?.frameId);
+		return { completed: true };
+	}
+	if (action === 'update-ocs') {
+		if (!payload?.ocs || typeof payload.ocs !== 'object' || Array.isArray(payload.ocs))
+			throw new Error('Invalid OCS configuration');
+		bridge?.setOCS(payload.ocs);
+		return { completed: true };
+	}
 	if (action === 'pages') {
 		return Promise.all(
 			[...pages].map(async ([id, page]) => ({ id, url: page.url(), title: await page.title().catch(() => '') }))
 		);
 	}
+	if (action === 'new-page') {
+		const page = await browser.newPage();
+		try {
+			if (payload?.url) await page.goto(checkedUrl(payload.url), { waitUntil: 'domcontentloaded' });
+			return { id: trackPage(page), url: page.url(), title: await page.title() };
+		} catch (error) {
+			await page.close().catch(() => {});
+			throw error;
+		}
+	}
 	const page = requirePage(payload);
+	if (action === 'close-page') {
+		await page.close();
+		return { completed: true };
+	}
+	if (action === 'reload') {
+		await page.reload({ waitUntil: 'domcontentloaded' });
+		return { id: trackPage(page), url: page.url(), title: await page.title() };
+	}
 	if (action === 'navigate') {
 		await page.goto(checkedUrl(payload.url), { waitUntil: 'domcontentloaded' });
 		return { id: trackPage(page), url: page.url(), title: await page.title() };
@@ -229,6 +350,20 @@ async function command(action: BrowserAction, payload: any) {
 			throw Object.assign(new Error('Invalid field text'), { status: 400, code: 'INVALID_TEXT' });
 		}
 		await page.locator(payload.selector).fill(payload.text);
+	} else if (action === 'press') {
+		if (typeof payload.key !== 'string' || !payload.key || payload.key.length > 200) throw new Error('Invalid key');
+		await page.locator(payload.selector).press(payload.key);
+	} else if (action === 'check') {
+		if (payload.checked !== undefined && typeof payload.checked !== 'boolean') throw new Error('Invalid checked');
+		await page.locator(payload.selector).setChecked(payload.checked !== false);
+	} else if (action === 'select') {
+		if (
+			!Array.isArray(payload.values) ||
+			payload.values.length > 100 ||
+			payload.values.some((value: unknown) => typeof value !== 'string' || value.length > 2000)
+		)
+			throw new Error('Invalid values');
+		await page.locator(payload.selector).selectOption(payload.values);
 	} else throw new Error('Unsupported action');
 	return { completed: true };
 }
@@ -236,9 +371,11 @@ async function command(action: BrowserAction, payload: any) {
 async function dispose(code = 0) {
 	if (shuttingDown) return;
 	shuttingDown = true;
+	if (resourceTimer) clearTimeout(resourceTimer);
 	const timer = setTimeout(() => process.exit(code), 5000);
 	try {
-		await browser?.close();
+		await screencast.stop();
+		await Promise.all([browser?.close(), ocrProxy?.close(), bridge?.close()]);
 	} catch {
 		// Closing an already crashed browser is expected during teardown.
 	} finally {

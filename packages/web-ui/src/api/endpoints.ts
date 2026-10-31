@@ -1,15 +1,22 @@
 import { request, requestBlob, type BlobOptions } from './client';
 import type {
 	AutomationDefinition,
+	BrowserStorage,
+	DataImportSummary,
 	BrowserPayload,
 	BrowserView,
 	DownloadItem,
 	PageInfo,
 	RuntimeState,
 	ScriptPayload,
+	ScriptUpdateCheck,
+	CatalogProvider,
+	CatalogScript,
+	CatalogVersion,
 	ServiceEvent,
 	SettingsPayload,
 	SystemInfo,
+	StorageTarget,
 	UserScript
 } from './types';
 
@@ -61,7 +68,41 @@ export const api = {
 		create: (payload: ScriptPayload) => request<UserScript>(`${base}/user-scripts`, { method: 'POST', body: payload }),
 		update: (id: string, payload: ScriptPayload) =>
 			request<UserScript>(`${base}/user-scripts/${encodeURIComponent(id)}`, { method: 'PATCH', body: payload }),
+		import: (payload: { url?: string; code?: string; name?: string; enabled?: boolean; pinned?: boolean }) =>
+			request<UserScript>(`${base}/user-scripts/import`, { method: 'POST', body: payload }),
+		catalog: (provider: CatalogProvider, q = '', page = 1) =>
+			request<{ provider: CatalogProvider; page: number; items: CatalogScript[] }>(
+				`${base}/script-catalog?${new URLSearchParams({ provider, q, page: String(page) })}`
+			),
+		versions: (provider: CatalogProvider, id: string, name: string) =>
+			request<CatalogVersion[]>(
+				`${base}/script-catalog/${provider}/${encodeURIComponent(id)}/versions?${new URLSearchParams({ name })}`
+			),
+		code: (id: string) => requestBlob(`${base}/user-scripts/${encodeURIComponent(id)}/code`),
+		checkUpdate: (id: string) =>
+			request<ScriptUpdateCheck>(`${base}/user-scripts/${encodeURIComponent(id)}/check-update`, { method: 'POST' }),
+		applyUpdate: (id: string) =>
+			request<UserScript>(`${base}/user-scripts/${encodeURIComponent(id)}/update`, { method: 'POST' }),
 		remove: (id: string) => request<void>(`${base}/user-scripts/${encodeURIComponent(id)}`, { method: 'DELETE' })
+	},
+
+	data: {
+		export: async (password: string) => {
+			const data = await request<string>(`${base}/data/export`, { method: 'POST', body: { password } });
+			return new Blob([JSON.stringify({ format: 'ocs-server-headless', version: 1, data })], {
+				type: 'application/json'
+			});
+		},
+		import: (content: string, password?: string) =>
+			request<DataImportSummary>(`${base}/data/import`, { method: 'POST', body: { content, password } })
+	},
+	storage: {
+		get: (id: string) => request<BrowserStorage>(`${base}/browsers/${encodeURIComponent(id)}/storage`),
+		clear: (id: string, target: StorageTarget) =>
+			request<BrowserStorage>(`${base}/browsers/${encodeURIComponent(id)}/storage`, {
+				method: 'DELETE',
+				body: { target }
+			})
 	},
 
 	settings: {

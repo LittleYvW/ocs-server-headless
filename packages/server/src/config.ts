@@ -10,8 +10,12 @@ export interface ServerConfig {
 	token: string;
 	allowedOrigins: string[];
 	maxBrowsers: number;
+	minFreeMemoryMB?: number;
+	maxCpuPercent?: number;
 	executablePath?: string;
 	extensions: string[];
+	ocrUrl?: string;
+	scriptManagerUrl?: string;
 	keyFile: string;
 	/** Optional console build. Missing files simply fall through to API 404s. */
 	webDir: string;
@@ -59,6 +63,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 	if (!Array.isArray(extensions) || extensions.some((p) => typeof p !== 'string' || !path.isAbsolute(p))) {
 		throw new Error('OCS_EXTENSIONS must be a JSON array of absolute paths');
 	}
+	for (const key of ['OCS_OCR_URL', 'OCS_SCRIPT_MANAGER_URL'] as const) {
+		if (!env[key]) continue;
+		let endpoint: URL;
+		try {
+			endpoint = new URL(env[key]!);
+		} catch {
+			throw new Error(`${key} must be an http/https URL`);
+		}
+		if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
+			throw new Error(`${key} must be an http/https URL without credentials`);
+		}
+	}
 	return {
 		host,
 		port: integer(env.OCS_PORT, 15319, 0, 65535),
@@ -66,8 +82,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 		token,
 		allowedOrigins,
 		maxBrowsers: integer(env.OCS_MAX_BROWSERS, 4, 1, 64),
+		minFreeMemoryMB: integer(env.OCS_MIN_FREE_MEMORY_MB, 0, 0, 1048576),
+		maxCpuPercent: integer(env.OCS_MAX_CPU_PERCENT, 0, 0, 100),
 		executablePath: env.OCS_BROWSER_EXECUTABLE_PATH || undefined,
 		extensions: extensions as string[],
+		ocrUrl: env.OCS_OCR_URL || undefined,
+		scriptManagerUrl: env.OCS_SCRIPT_MANAGER_URL || undefined,
 		keyFile: path.resolve(env.OCS_ENCRYPTION_KEY_FILE || path.join(dataDir, 'encryption.key')),
 		webDir: path.resolve(env.OCS_WEB_DIR || path.join(__dirname, '..', 'web'))
 	};

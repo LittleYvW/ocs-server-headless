@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { service } from '@/stores/service';
 import { computed } from 'vue';
 import AppIcon from '@/components/AppIcon.vue';
 import EventList from '@/components/EventList.vue';
@@ -159,7 +160,9 @@ const recentRuns = computed(() =>
 					class="dim small"
 					role="note"
 				>
-					此程序可能需要验证码识别。当前服务未提供 OCR，遇到验证码时登录可能失败。
+					此程序可能需要验证码识别。{{
+						service.system?.ocrAvailable ? '服务已配置 OCR。' : '尚未配置 OCR，遇到验证码时登录可能失败。'
+					}}
 				</p>
 				<div
 					v-if="fieldsOf(entry.name, entry.configs).length"

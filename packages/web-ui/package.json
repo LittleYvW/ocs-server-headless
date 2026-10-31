@@ -8,7 +8,7 @@
 		"build": "vue-tsc --noEmit && vite build",
 		"typecheck": "vue-tsc --noEmit",
 		"preview": "vite preview",
-		"test:e2e": "node tests/console.e2e.cjs"
+		"test:e2e": "node tests/console.e2e.cjs && node tests/userscripts.e2e.cjs && node tests/management.e2e.cjs"
 	},
 	"dependencies": {
 		"vue": "^3.5.13",

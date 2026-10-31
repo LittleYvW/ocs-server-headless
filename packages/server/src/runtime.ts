@@ -4,6 +4,8 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { BrowserProfile, RuntimeState, UserScript } from './types';
 import type { BrowserAction, WorkerRequest, WorkerResponse } from './protocol';
+import { checkResourceCapacity } from './resource';
+import { ApiError } from './api-error';
 
 export type { RuntimeState } from './types';
 
@@ -11,7 +13,11 @@ export interface RuntimeOptions {
 	dataDir: string;
 	executablePath?: string;
 	maxBrowsers: number;
+	minFreeMemoryMB?: number;
+	maxCpuPercent?: number;
 	extensions: string[];
+	ocrUrl?: string;
+	scriptManagerUrl?: string;
 	/** Keep the Linux data lock alive until browser workers have also exited. */
 	lockDescriptor?: number;
 	/** Dependency injection for process lifecycle tests; never supplied by the API. */
@@ -35,6 +41,7 @@ type Pending = {
 
 type Instance = {
 	state: RuntimeState;
+	ocs?: Record<string, unknown>;
 	child?: ChildProcess;
 	pending: Map<string, Pending>;
 	start?: Promise<RuntimeState>;
@@ -47,6 +54,7 @@ type Instance = {
 export class Runtime {
 	private instances = new Map<string, Instance>();
 	private closing = false;
+	private previews = new Map<string, (frame: Record<string, unknown>) => Promise<void>>();
 
 	constructor(private options: RuntimeOptions, private onEvent: (type: string, data: unknown) => void) {}
 
@@ -58,7 +66,11 @@ export class Runtime {
 		return { ...(this.instances.get(id)?.state || { id, status: 'stopped' }) };
 	}
 
-	async start(profile: BrowserProfile, scripts: UserScript[]): Promise<RuntimeState> {
+	async start(
+		profile: BrowserProfile,
+		scripts: UserScript[],
+		ocs: Record<string, unknown> = {}
+	): Promise<RuntimeState> {
 		if (this.closing) throw new RuntimeError('Service is shutting down', 503, 'SHUTTING_DOWN');
 		if (!/^[a-zA-Z0-9_-]{1,100}$/.test(profile.id)) {
 			throw new RuntimeError('Invalid browser ID', 400, 'INVALID_ID');
@@ -71,15 +83,27 @@ export class Runtime {
 		if (active.length >= this.options.maxBrowsers) {
 			throw new RuntimeError('Maximum browser concurrency reached', 409, 'BROWSER_LIMIT');
 		}
-		const entry: Instance = { state: { id: profile.id, status: 'starting' }, pending: new Map() };
+		const entry: Instance = {
+			state: { id: profile.id, status: 'starting' },
+			pending: new Map(),
+			ocs: structuredClone(ocs)
+		};
 		this.instances.set(profile.id, entry);
 		this.publish(entry);
-		entry.start = this.launch(entry, profile, scripts);
+		entry.start = this.launch(entry, profile, scripts, ocs);
 		return entry.start;
 	}
 
-	private async launch(entry: Instance, profile: BrowserProfile, scripts: UserScript[]): Promise<RuntimeState> {
+	private async launch(
+		entry: Instance,
+		profile: BrowserProfile,
+		scripts: UserScript[],
+		ocs: Record<string, unknown>
+	): Promise<RuntimeState> {
 		try {
+			if (this.options.minFreeMemoryMB || this.options.maxCpuPercent) await checkResourceCapacity(this.options);
+			if (this.closing || entry.state.status !== 'starting')
+				throw new RuntimeError('Browser startup was cancelled', 409, 'START_CANCELLED');
 			mkdirSync(path.join(this.options.dataDir, 'profiles', profile.id), { recursive: true, mode: 0o700 });
 			const child = fork(this.options.workerPath || path.join(__dirname, 'worker.js'), [], {
 				stdio:
@@ -105,12 +129,24 @@ export class Runtime {
 					scripts,
 					dataDir: this.options.dataDir,
 					executablePath: this.options.executablePath,
-					extensions: this.options.extensions
+					extensions: this.options.extensions,
+					ocs,
+					ocrUrl: this.options.ocrUrl,
+					scriptManagerUrl: this.options.scriptManagerUrl
 				},
-				this.options.startupTimeoutMs || 60000
+				this.options.startupTimeoutMs ||
+					Math.min(300000, 60000 + scripts.filter((script) => script.mode === 'userscript').length * 45000)
 			);
 			if (entry.state.status !== 'starting' || !entry.child) {
 				throw new RuntimeError('Browser startup was cancelled', 409, 'START_CANCELLED');
+			}
+			let applied = JSON.stringify(ocs);
+			while (JSON.stringify(entry.ocs) !== applied) {
+				const latest = structuredClone(entry.ocs);
+				await this.request(entry, 'update-ocs', { ocs: latest }, this.options.commandTimeoutMs || 35000);
+				applied = JSON.stringify(latest);
+				if (entry.state.status !== 'starting' || !entry.child)
+					throw new RuntimeError('Browser startup was cancelled', 409, 'START_CANCELLED');
 			}
 			entry.state.status = 'running';
 			this.publish(entry);
@@ -122,6 +158,8 @@ export class Runtime {
 			}
 			throw error instanceof RuntimeError
 				? error
+				: error instanceof ApiError
+				? new RuntimeError(error.message, error.status, error.code)
 				: new RuntimeError('Browser startup failed; check browser installation and dependencies', 502, 'START_FAILED');
 		}
 	}
@@ -130,7 +168,13 @@ export class Runtime {
 		const entry = this.instances.get(id);
 		if (!entry) return { id, status: 'stopped' };
 		if (entry.stop) return entry.stop;
-		if (!entry.child) return { ...entry.state };
+		if (!entry.child) {
+			if (entry.state.status === 'starting') {
+				entry.state.status = 'stopped';
+				this.publish(entry);
+			}
+			return { ...entry.state };
+		}
 		entry.state.status = 'stopping';
 		this.publish(entry);
 		entry.stop = (async () => {
@@ -147,9 +191,13 @@ export class Runtime {
 		}
 	}
 
-	async restart(profile: BrowserProfile, scripts: UserScript[]): Promise<RuntimeState> {
+	async restart(
+		profile: BrowserProfile,
+		scripts: UserScript[],
+		ocs: Record<string, unknown> = {}
+	): Promise<RuntimeState> {
 		await this.stop(profile.id);
-		return this.start(profile, scripts);
+		return this.start(profile, scripts, ocs);
 	}
 
 	async command(id: string, action: BrowserAction, payload: any = {}): Promise<any> {
@@ -157,10 +205,67 @@ export class Runtime {
 		if (!entry || entry.state.status !== 'running' || !entry.child) {
 			throw new RuntimeError('Browser is not running', 409, 'BROWSER_NOT_RUNNING');
 		}
-		if (!['pages', 'navigate', 'screenshot', 'click', 'fill'].includes(action)) {
+		if (
+			![
+				'pages',
+				'navigate',
+				'screenshot',
+				'click',
+				'fill',
+				'new-page',
+				'close-page',
+				'reload',
+				'press',
+				'check',
+				'select',
+				'screencast-start',
+				'screencast-stop',
+				'screencast-ack'
+			].includes(action)
+		) {
 			throw new RuntimeError('Unsupported browser action', 400, 'INVALID_ACTION');
 		}
 		return this.request(entry, action, payload, this.options.commandTimeoutMs || 35000);
+	}
+
+	async syncOCS(ocs: Record<string, unknown>): Promise<void> {
+		for (const entry of this.instances.values()) {
+			if (['starting', 'running'].includes(entry.state.status)) entry.ocs = structuredClone(ocs);
+		}
+		await Promise.all(
+			[...this.instances.values()]
+				.filter((entry) => entry.state.status === 'running')
+				.map(async (entry) => {
+					try {
+						await this.request(entry, 'update-ocs', { ocs }, this.options.commandTimeoutMs || 35000);
+					} catch {
+						// The settings are already durable. A concurrent stop needs no live update;
+						// other failures remain visible without reporting a failed database save.
+						if (entry.state.status === 'running')
+							this.onEvent('settings.sync-warning', { profileId: entry.state.id, code: 'OCS_SYNC_FAILED' });
+					}
+				})
+		);
+	}
+
+	async preview(
+		id: string,
+		payload: Record<string, unknown>,
+		write: (frame: Record<string, unknown>) => Promise<void>
+	): Promise<() => void> {
+		if (this.previews.has(id)) throw new RuntimeError('A live preview is already connected', 409, 'PREVIEW_BUSY');
+		this.previews.set(id, write);
+		try {
+			await this.command(id, 'screencast-start', payload);
+		} catch (error) {
+			this.previews.delete(id);
+			throw error;
+		}
+		return () => {
+			if (this.previews.get(id) !== write) return;
+			this.previews.delete(id);
+			void this.command(id, 'screencast-stop').catch(() => {});
+		};
 	}
 
 	async close(): Promise<void> {
@@ -195,6 +300,39 @@ export class Runtime {
 	private receive(entry: Instance, message: WorkerResponse) {
 		if (!message || typeof message !== 'object') return;
 		if ('event' in message) {
+			if (message.event === 'screencast-ended') {
+				const write = this.previews.get(entry.state.id);
+				this.previews.delete(entry.state.id);
+				void write?.({ ended: true }).catch(() => {});
+				return;
+			}
+			// Frames are private streaming data, never ordinary events or persisted JSONL logs.
+			if (message.event === 'screencast-frame') {
+				const write = this.previews.get(entry.state.id);
+				if (write)
+					void write(message.data)
+						.catch(() => {})
+						.finally(() => {
+							void this.command(entry.state.id, 'screencast-ack', { frameId: message.data.frameId }).catch(() => {});
+						});
+				return;
+			}
+			if (
+				message.event === 'resource-usage' &&
+				['memoryMB', 'cpuPercent', 'cpuTime'].every(
+					(key) =>
+						typeof message.data[key] === 'number' &&
+						Number.isFinite(message.data[key]) &&
+						Number(message.data[key]) >= 0
+				)
+			) {
+				entry.state.resources = {
+					memoryMB: Number(message.data.memoryMB),
+					cpuPercent: Number(message.data.cpuPercent),
+					cpuTime: Number(message.data.cpuTime),
+					sampledAt: new Date().toISOString()
+				};
+			}
 			this.onEvent(message.event, { ...message.data, profileId: entry.state.id });
 			return;
 		}
@@ -219,6 +357,8 @@ export class Runtime {
 	}
 
 	private exited(entry: Instance) {
+		void this.previews.get(entry.state.id)?.({ ended: true });
+		this.previews.delete(entry.state.id);
 		entry.child = undefined;
 		delete entry.state.pid;
 		if (entry.state.status === 'stopping') entry.state.status = 'stopped';

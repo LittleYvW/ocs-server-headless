@@ -239,7 +239,7 @@ async function main() {
 		await page.selectOption('.auto-add select', { label: '超星-自动登录' });
 		await page.click('button:has-text("添加")');
 		const cxBlock = page.locator('.auto-block').filter({ hasText: '超星-自动登录' });
-		await cxBlock.getByRole('note').filter({ hasText: '当前服务未提供 OCR' }).waitFor();
+		await cxBlock.getByRole('note').filter({ hasText: '尚未配置 OCR' }).waitFor();
 		await cxBlock.waitFor();
 		assert.equal(await cxBlock.locator('.field__label', { hasText: '手机号' }).count(), 1);
 		assert.equal(await cxBlock.locator('.field__label', { hasText: '学校/单位' }).count(), 0);

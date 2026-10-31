@@ -36,9 +36,14 @@ function sideEffects(event: ServiceEvent): void {
 			const runtime: RuntimeState = { id: data.profileId, status: data.status as RuntimeState['status'] };
 			if (typeof data.pid === 'number') runtime.pid = data.pid;
 			if (typeof data.error === 'string') runtime.error = data.error;
+			if (data.resources && typeof data.resources === 'object')
+				runtime.resources = data.resources as RuntimeState['resources'];
 			applyRuntime(data.profileId, runtime);
 			return;
 		}
+		case 'resource-usage':
+			scheduleBrowserRefresh();
+			return;
 		case 'browser.created':
 		case 'browser.updated':
 		case 'browser.deleted':

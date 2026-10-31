@@ -35,7 +35,7 @@ function openEdit(browser: BrowserView): void {
 }
 
 function canConfigure(browser: BrowserView): boolean {
-	return ['stopped', 'error'].includes(browser.runtime.status);
+	return !browser.runtime.pid && ['stopped', 'error'].includes(browser.runtime.status);
 }
 
 function onSaved(browser: BrowserView): void {
@@ -131,6 +131,11 @@ watch(() => route.query.create, checkCreateQuery);
 					<div class="instance-cell">
 						<span class="instance-cell__name">{{ item.name }}</span>
 						<span class="instance-cell__meta mono">{{ shortId(item.id) }}</span>
+						<span
+							v-if="item.group || item.tags?.length"
+							class="instance-cell__meta truncate"
+							>{{ [item.group, ...(item.tags || [])].filter(Boolean).join(' · ') }}</span
+						>
 						<span
 							v-if="item.runtime.error"
 							class="instance-cell__error"

@@ -7,19 +7,12 @@ import { ServerConfig } from './config';
 import { Store } from './store';
 import { Events, ServiceEvent } from './events';
 import { Runtime } from './runtime';
-import {
-	ApiError,
-	bad,
-	missing,
-	object,
-	fields,
-	text,
-	url,
-	id,
-	browserInput,
-	publicBrowser,
-	scriptInput
-} from './validation';
+import { createUserScriptRouter } from './userscripts';
+import { createTransferRouter } from './transfer';
+import { createStorageRouter } from './storage';
+import { hostResources } from './resource';
+import { createScriptCatalogRouter } from './catalog';
+import { ApiError, bad, missing, object, fields, text, url, id, browserInput, publicBrowser } from './validation';
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
@@ -64,6 +57,8 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 		}
 		next();
 	});
+	app.use('/api/v1/data', express.json({ limit: '30mb', strict: true }));
+	app.use('/api/v1/user-scripts', express.json({ limit: '3mb', strict: true }));
 	app.use('/api/v1', express.json({ limit: '1mb', strict: true }));
 	const api = express.Router();
 	app.use('/api/v1', api);
@@ -74,15 +69,25 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 	};
 	const data = (res: Response, value: unknown, status = 200) => res.status(status).json({ data: value });
 	const profile = (value: string) => store.read().browsers.find((p) => p.id === id(value)) || missing();
-	const script = (value: string) => store.read().userScripts.find((s) => s.id === id(value)) || missing();
 	const stopped = (value: string) => {
-		if (['starting', 'running', 'stopping'].includes(runtime.get(value).status))
+		if (runtime.get(value).pid || ['starting', 'running', 'stopping'].includes(runtime.get(value).status))
 			throw new ApiError(409, 'BROWSER_BUSY', 'Stop the browser before changing its configuration');
 	};
 	const view = (p: ReturnType<typeof profile>) => ({ ...publicBrowser(p), runtime: runtime.get(p.id) });
 	const scriptsExist = (ids: string[]) => {
 		const scripts = store.read().userScripts;
 		if (ids.some((value) => !scripts.some((s) => s.id === value))) bad('Unknown user script');
+		const identities = new Set<string>();
+		for (const script of scripts.filter(
+			(item) => ids.includes(item.id) && item.enabled && item.mode === 'userscript'
+		)) {
+			const identity = JSON.stringify([
+				script.metadata?.values.namespace?.[0] || '',
+				script.metadata?.values.name?.[0] || script.name
+			]);
+			if (identities.has(identity)) bad('Selected userscripts have the same name and namespace');
+			identities.add(identity);
+		}
 	};
 	api.get(
 		'/system',
@@ -93,12 +98,21 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 				node: process.version,
 				platform: process.platform,
 				headless: true,
+				ocrAvailable: !!config.ocrUrl,
+				resources: hostResources(),
+				resourcePolicy: { minFreeMemoryMB: config.minFreeMemoryMB, maxCpuPercent: config.maxCpuPercent },
 				maxBrowsers: config.maxBrowsers,
 				browsers: runtime.list(),
 				capabilities: [
 					'persistent-profiles',
 					'automation-scripts',
 					'plain-user-scripts',
+					'standard-user-scripts',
+					'userscript-import-update',
+					'ocs-config-sync',
+					'ocs-actions',
+					'encrypted-data-transfer',
+					'resource-monitoring',
 					'screenshots',
 					'page-actions',
 					'downloads',
@@ -112,7 +126,13 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 		route((_req, res) =>
 			data(
 				res,
-				AutomationScripts.map((s) => ({ name: s.name, icon: s.icon, configs: s.configs, needOCR: !!s.needOCR }))
+				AutomationScripts.map((s) => ({
+					name: s.name,
+					icon: s.icon,
+					configs: s.configs,
+					needOCR: !!s.needOCR,
+					ocrAvailable: !!config.ocrUrl
+				}))
 			)
 		)
 	);
@@ -169,8 +189,14 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 			`/browsers/:id/${action}`,
 			route(async (req, res) => {
 				const item = profile(req.params.id);
+				if (action !== 'stop') scriptsExist(item.userScriptIds);
 				const scripts = store.read().userScripts.filter((s) => item.userScriptIds.includes(s.id) && s.enabled);
-				return data(res, action === 'stop' ? await runtime.stop(item.id) : await runtime[action](item, scripts));
+				return data(
+					res,
+					action === 'stop'
+						? await runtime.stop(item.id)
+						: await runtime[action](item, scripts, store.read().settings.ocs)
+				);
 			})
 		);
 	}
@@ -212,6 +238,48 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 			res.type('png').send(Buffer.from(shot.base64, 'base64'));
 		})
 	);
+	for (const action of ['new-page', 'close-page', 'reload', 'press', 'check', 'select'] as const) {
+		api.post(
+			`/browsers/:id/${action}`,
+			route(async (req, res) => {
+				const body = object(req.body || {});
+				const allowed =
+					action === 'new-page'
+						? ['url']
+						: [
+								'pageId',
+								...(action === 'press'
+									? ['selector', 'key']
+									: action === 'check'
+									? ['selector', 'checked']
+									: action === 'select'
+									? ['selector', 'values']
+									: [])
+						  ];
+				fields(body, allowed);
+				const payload: Record<string, unknown> = {};
+				if (body.pageId !== undefined) payload.pageId = text(body.pageId, 'pageId', 100);
+				if (action === 'close-page' && !payload.pageId) bad('pageId is required');
+				if (action === 'new-page') payload.url = body.url === undefined ? 'about:blank' : url(body.url);
+				if (['press', 'check', 'select'].includes(action)) payload.selector = text(body.selector, 'selector', 2000);
+				if (action === 'press') payload.key = text(body.key, 'key', 100);
+				if (action === 'check') {
+					if (body.checked !== undefined && typeof body.checked !== 'boolean') bad('checked must be boolean');
+					payload.checked = body.checked ?? true;
+				}
+				if (action === 'select') {
+					if (
+						!Array.isArray(body.values) ||
+						body.values.length > 100 ||
+						body.values.some((value: unknown) => typeof value !== 'string' || value.length > 2000)
+					)
+						bad('Invalid select values');
+					payload.values = body.values;
+				}
+				return data(res, await runtime.command(profile(req.params.id).id, action, payload));
+			})
+		);
+	}
 	api.get(
 		'/browsers/:id/downloads',
 		route((req, res) => {
@@ -226,6 +294,40 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 		})
 	);
 	api.get(
+		'/browsers/:id/preview',
+		route(async (req, res) => {
+			const profileId = profile(req.params.id).id;
+			const pageId = req.query.pageId === undefined ? undefined : text(req.query.pageId, 'pageId', 100);
+			res.set({ 'Content-Type': 'multipart/x-mixed-replace; boundary=ocs-frame', 'X-Accel-Buffering': 'no' });
+			let release: (() => void) | undefined;
+			res.once('close', () => release?.());
+			release = await runtime.preview(profileId, { pageId }, async (frame) => {
+				if (frame.ended) {
+					res.end();
+					return;
+				}
+				if (res.destroyed || res.writableEnded || typeof frame.base64 !== 'string') return;
+				const bytes = Buffer.from(frame.base64, 'base64');
+				const header = Buffer.from(
+					`--ocs-frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${bytes.length}\r\n\r\n`
+				);
+				if (!res.write(Buffer.concat([header, bytes, Buffer.from('\r\n')]))) {
+					await new Promise<void>((resolve) => {
+						const done = () => {
+							res.off('drain', done);
+							res.off('close', done);
+							resolve();
+						};
+						res.once('drain', done);
+						res.once('close', done);
+					});
+				}
+			});
+			if (res.destroyed) release();
+			else res.flushHeaders();
+		})
+	);
+	api.get(
 		'/browsers/:id/downloads/:filename',
 		route((req, res) => {
 			const dir = path.join(config.dataDir, 'downloads', profile(req.params.id).id);
@@ -237,64 +339,24 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 			res.download(file, filename);
 		})
 	);
-	api.get(
-		'/user-scripts',
-		route((_req, res) => data(res, store.read().userScripts))
-	);
-	api.post(
-		'/user-scripts',
-		route((req, res) => {
-			const input = scriptInput(req.body);
-			if (store.read().userScripts.length >= 1000) throw new ApiError(409, 'LIMIT_REACHED', 'Script limit reached');
-			const now = new Date().toISOString();
-			const item = { ...input, id: randomUUID(), createdAt: now, updatedAt: now };
-			store.update((db) => db.userScripts.push(item));
-			events.publish('userscript.created', { scriptId: item.id });
-			return data(res, item, 201);
-		})
-	);
-	api.get(
-		'/user-scripts/:id',
-		route((req, res) => data(res, script(req.params.id)))
-	);
-	api.patch(
-		'/user-scripts/:id',
-		route((req, res) => {
-			const previous = script(req.params.id);
-			const item = { ...previous, ...scriptInput(req.body, previous), updatedAt: new Date().toISOString() };
-			store.update((db) => {
-				db.userScripts[db.userScripts.findIndex((s) => s.id === item.id)] = item;
-			});
-			events.publish('userscript.updated', { scriptId: item.id });
-			return data(res, item);
-		})
-	);
-	api.delete(
-		'/user-scripts/:id',
-		route((req, res) => {
-			const item = script(req.params.id);
-			if (store.read().browsers.some((p) => p.userScriptIds.includes(item.id)))
-				throw new ApiError(409, 'SCRIPT_IN_USE', 'Remove browser references before deleting the script');
-			store.update((db) => {
-				db.userScripts = db.userScripts.filter((s) => s.id !== item.id);
-			});
-			events.publish('userscript.deleted', { scriptId: item.id });
-			res.sendStatus(204);
-		})
-	);
+	api.use('/user-scripts', createUserScriptRouter(config, store, events));
+	api.use('/script-catalog', createScriptCatalogRouter());
+	api.use('/data', createTransferRouter(store, runtime, events));
+	api.use('/browsers', createStorageRouter(store, runtime, events));
 	api.get(
 		'/settings',
 		route((_req, res) => data(res, store.read().settings))
 	);
 	api.patch(
 		'/settings',
-		route((req, res) => {
+		route(async (req, res) => {
 			const body = object(req.body);
 			fields(body, ['ocs']);
 			const ocs = object(body.ocs);
 			store.update((db) => {
 				db.settings.ocs = ocs;
 			});
+			await runtime.syncOCS(ocs);
 			events.publish('settings.updated', {});
 			return data(res, store.read().settings);
 		})
@@ -370,18 +432,21 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 			: error instanceof SyntaxError
 			? 400
 			: 500;
-		res.status(status).json({
-			error: {
-				code: known
-					? error.code
-					: status === 413
-					? 'BODY_TOO_LARGE'
-					: status === 400
-					? 'INVALID_JSON'
-					: 'INTERNAL_ERROR',
-				message: known ? error.message : status === 500 ? 'Internal server error' : 'Invalid request body'
-			}
-		});
+		res
+			.type('application/json')
+			.status(status)
+			.json({
+				error: {
+					code: known
+						? error.code
+						: status === 413
+						? 'BODY_TOO_LARGE'
+						: status === 400
+						? 'INVALID_JSON'
+						: 'INTERNAL_ERROR',
+					message: known ? error.message : status === 500 ? 'Internal server error' : 'Invalid request body'
+				}
+			});
 	});
 	return app;
 }
