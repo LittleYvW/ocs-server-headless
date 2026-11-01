@@ -15,6 +15,7 @@ import { prepareScriptManager, installManagedScripts, hasManagedScripts, isManag
 import { ResourceSampler } from './resource';
 import { Screencast } from './screencast';
 import { BrowserInput } from './browser-input';
+import { browserLocator } from './browser-target';
 import { ApiError } from './api-error';
 
 let browser: BrowserContext | undefined;
@@ -364,18 +365,19 @@ async function command(action: BrowserAction, payload: any) {
 	if (typeof payload?.selector !== 'string' || !payload.selector || payload.selector.length > 2000) {
 		throw Object.assign(new Error('Invalid selector'), { status: 400, code: 'INVALID_SELECTOR' });
 	}
-	if (action === 'click') await page.locator(payload.selector).click();
+	const locator = browserLocator(page, payload.selector, payload.framePath);
+	if (action === 'click') await locator.click();
 	else if (action === 'fill') {
 		if (typeof payload.text !== 'string' || payload.text.length > 100000) {
 			throw Object.assign(new Error('Invalid field text'), { status: 400, code: 'INVALID_TEXT' });
 		}
-		await page.locator(payload.selector).fill(payload.text);
+		await locator.fill(payload.text);
 	} else if (action === 'press') {
 		if (typeof payload.key !== 'string' || !payload.key || payload.key.length > 200) throw new Error('Invalid key');
-		await page.locator(payload.selector).press(payload.key);
+		await locator.press(payload.key);
 	} else if (action === 'check') {
 		if (payload.checked !== undefined && typeof payload.checked !== 'boolean') throw new Error('Invalid checked');
-		await page.locator(payload.selector).setChecked(payload.checked !== false);
+		await locator.setChecked(payload.checked !== false);
 	} else if (action === 'select') {
 		if (
 			!Array.isArray(payload.values) ||
@@ -383,7 +385,7 @@ async function command(action: BrowserAction, payload: any) {
 			payload.values.some((value: unknown) => typeof value !== 'string' || value.length > 2000)
 		)
 			throw new Error('Invalid values');
-		await page.locator(payload.selector).selectOption(payload.values);
+		await locator.selectOption(payload.values);
 	} else throw new Error('Unsupported action');
 	return { completed: true };
 }

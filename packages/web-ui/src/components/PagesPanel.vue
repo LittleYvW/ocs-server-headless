@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AppIcon from '@/components/AppIcon.vue';
 import BaseButton from '@/components/BaseButton.vue';
 import BaseSwitch from '@/components/BaseSwitch.vue';
@@ -10,7 +10,7 @@ import { normalizeUrl } from '@/lib/config';
 import { formatStamp, profileOf } from '@/lib/format';
 import { feed } from '@/stores/events';
 import { toast } from '@/stores/toasts';
-import type { BrowserView, PageInfo } from '@/api/types';
+import type { BrowserElement, BrowserView, PageInfo } from '@/api/types';
 
 const props = defineProps<{ browser: BrowserView }>();
 const emit = defineEmits<{ count: [count: number]; start: [] }>();
@@ -31,6 +31,9 @@ const livePreview = ref<InstanceType<typeof LivePreview>>();
 const navUrl = ref('');
 const clickSelector = ref('');
 const fillSelector = ref('');
+const clickFramePath = ref<string[]>([]);
+const fillFramePath = ref<string[]>([]);
+const advanced = ref<HTMLDetailsElement>();
 const fillText = ref('');
 const action = ref<
 	'' | 'navigate' | 'click' | 'fill' | 'new-page' | 'close-page' | 'reload' | 'go-back' | 'go-forward'
@@ -208,6 +211,21 @@ function pageChanged(): void {
 	pageTimer = setTimeout(() => void loadPages(), 250);
 }
 
+async function usePicked(target: BrowserElement & { pageId: string; action: 'click' | 'fill' }): Promise<void> {
+	if (target.pageId !== selectedId.value) return;
+	livePreview.value?.stopControl();
+	if (target.action === 'click') {
+		clickSelector.value = target.selector;
+		clickFramePath.value = [...target.framePath];
+	} else {
+		fillSelector.value = target.selector;
+		fillFramePath.value = [...target.framePath];
+	}
+	if (advanced.value) advanced.value.open = true;
+	await nextTick();
+	advanced.value?.querySelector<HTMLInputElement>(`input[data-target="${target.action}"]`)?.focus();
+}
+
 async function click(): Promise<void> {
 	if (action.value || !running()) return;
 	const selector = clickSelector.value.trim();
@@ -219,7 +237,7 @@ async function click(): Promise<void> {
 	actionError.value = '';
 	try {
 		livePreview.value?.stopControl();
-		await api.browsers.click(props.browser.id, selector, selectedId.value || undefined);
+		await api.browsers.click(props.browser.id, selector, selectedId.value || undefined, clickFramePath.value);
 		await new Promise((resolve) => setTimeout(resolve, 350));
 		await loadPages(selectedId.value);
 		await capture();
@@ -241,7 +259,13 @@ async function fill(): Promise<void> {
 	actionError.value = '';
 	try {
 		livePreview.value?.stopControl();
-		await api.browsers.fill(props.browser.id, selector, fillText.value, selectedId.value || undefined);
+		await api.browsers.fill(
+			props.browser.id,
+			selector,
+			fillText.value,
+			selectedId.value || undefined,
+			fillFramePath.value
+		);
 		fillText.value = '';
 		await capture();
 		toast('已填入字段。', 'ok');
@@ -257,6 +281,10 @@ function onVisibility(): void {
 }
 
 watch(pages, (list) => emit('count', list.length), { immediate: true });
+watch(selectedId, () => {
+	clickFramePath.value = [];
+	fillFramePath.value = [];
+});
 
 // Automation and navigation can open or close pages without a user action.
 watch(lastPageEvent, () => {
@@ -462,6 +490,7 @@ onBeforeUnmount(() => {
 				:page-id="selectedId"
 				@active="previewActive = $event"
 				@changed="pageChanged"
+				@picked="usePicked"
 			/>
 			<section
 				v-if="!previewActive"
@@ -598,7 +627,10 @@ onBeforeUnmount(() => {
 				>
 			</form>
 
-			<details class="advanced-actions">
+			<details
+				ref="advanced"
+				class="advanced-actions"
+			>
 				<summary>高级操作 · 选择器</summary>
 				<div class="ops__grid">
 					<form
@@ -610,11 +642,23 @@ onBeforeUnmount(() => {
 							<span class="field__control">
 								<input
 									v-model="clickSelector"
+									data-target="click"
 									maxlength="2000"
 									spellcheck="false"
 									placeholder="button[type=submit]"
 								/>
 							</span>
+							<span
+								v-if="clickFramePath.length"
+								class="frame-scope"
+								>框架：{{ clickFramePath.join(' → ') }}
+								<button
+									type="button"
+									@click="clickFramePath = []"
+								>
+									清除范围
+								</button></span
+							>
 						</label>
 						<BaseButton
 							type="submit"
@@ -633,11 +677,23 @@ onBeforeUnmount(() => {
 							<span class="field__control">
 								<input
 									v-model="fillSelector"
+									data-target="fill"
 									maxlength="2000"
 									spellcheck="false"
 									placeholder="input[name=username]"
 								/>
 							</span>
+							<span
+								v-if="fillFramePath.length"
+								class="frame-scope"
+								>框架：{{ fillFramePath.join(' → ') }}
+								<button
+									type="button"
+									@click="fillFramePath = []"
+								>
+									清除范围
+								</button></span
+							>
 						</label>
 						<label class="field field--grow">
 							<span class="field__label">内容</span>
@@ -696,6 +752,17 @@ onBeforeUnmount(() => {
 }
 .advanced-actions[open] summary {
 	margin-bottom: 14px;
+}
+.frame-scope {
+	color: var(--text-3);
+	font-size: 10px;
+	overflow-wrap: anywhere;
+}
+.frame-scope button {
+	color: var(--accent);
+	background: none;
+	border: 0;
+	padding: 2px;
 }
 
 .ghost-pages {

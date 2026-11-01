@@ -21,7 +21,12 @@ export class InputChannel {
 	push(event: BrowserInputEvent): void {
 		if (this.stopped) return;
 		const previous = this.events[this.events.length - 1];
-		if (event.type === 'wheel' && previous?.type === 'wheel') {
+		if (
+			(event.type === 'move' && previous?.type === 'move') ||
+			(event.type === 'inspect' && previous?.type === 'inspect')
+		) {
+			this.events[this.events.length - 1] = event;
+		} else if (event.type === 'wheel' && previous?.type === 'wheel') {
 			previous.x = event.x;
 			previous.y = event.y;
 			previous.deltaX = Math.max(-10000, Math.min(10000, previous.deltaX + event.deltaX));

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Page } from 'playwright-core';
 import { ApiError, bad, fields, object, text } from './validation';
+import { inspectBrowserElement, type BrowserElement } from './browser-target';
 
 type Modifier = 'Alt' | 'Control' | 'ControlOrMeta' | 'Meta' | 'Shift';
 export type BrowserInputEvent =
@@ -13,6 +14,17 @@ export type BrowserInputEvent =
 			modifiers?: Modifier[];
 	  }
 	| { type: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }
+	| { type: 'move'; x: number; y: number }
+	| {
+			type: 'pointer-down' | 'pointer-up';
+			x: number;
+			y: number;
+			button?: 'left' | 'middle' | 'right';
+			clickCount?: number;
+			modifiers?: Modifier[];
+	  }
+	| { type: 'pointer-cancel' }
+	| { type: 'inspect'; x: number; y: number; requestId: number }
 	| { type: 'key'; key: string; modifiers?: Modifier[] }
 	| { type: 'text'; text: string };
 
@@ -52,29 +64,36 @@ export function browserInputBatch(value: unknown): BrowserInputBatch {
 	if (!Array.isArray(body.events) || body.events.length > 32) bad('Expected at most 32 input events');
 	for (const value of body.events) {
 		const event = object(value);
-		const allowed =
-			event.type === 'click'
-				? ['x', 'y', 'button', 'clickCount', 'modifiers']
-				: event.type === 'wheel'
-				? ['x', 'y', 'deltaX', 'deltaY']
-				: event.type === 'key'
-				? ['key', 'modifiers']
-				: event.type === 'text'
-				? ['text']
-				: undefined;
+		const allowed = ['click', 'pointer-down', 'pointer-up'].includes(event.type)
+			? ['x', 'y', 'button', 'clickCount', 'modifiers']
+			: event.type === 'move'
+			? ['x', 'y']
+			: event.type === 'pointer-cancel'
+			? []
+			: event.type === 'inspect'
+			? ['x', 'y', 'requestId']
+			: event.type === 'wheel'
+			? ['x', 'y', 'deltaX', 'deltaY']
+			: event.type === 'key'
+			? ['key', 'modifiers']
+			: event.type === 'text'
+			? ['text']
+			: undefined;
 		if (!allowed) throw new ApiError(400, 'INVALID_REQUEST', 'Unsupported input event');
 		fields(event, ['type', ...allowed]);
-		if (event.type === 'click' || event.type === 'wheel') {
+		if (['click', 'wheel', 'move', 'pointer-down', 'pointer-up', 'inspect'].includes(event.type)) {
 			for (const coordinate of [event.x, event.y]) {
 				if (typeof coordinate !== 'number' || !Number.isFinite(coordinate) || coordinate < 0 || coordinate >= 1)
 					bad('Expected viewport coordinates in [0, 1)');
 			}
 		}
-		if (event.type === 'click') {
+		if (['click', 'pointer-down', 'pointer-up'].includes(event.type)) {
 			if (event.button !== undefined && !['left', 'middle', 'right'].includes(event.button))
 				bad('Invalid mouse button');
 			if (event.clickCount !== undefined && ![1, 2].includes(event.clickCount)) bad('Invalid click count');
 		}
+		if (event.type === 'inspect' && (!Number.isSafeInteger(event.requestId) || event.requestId < 1))
+			bad('Invalid inspection request ID');
 		if (event.type === 'wheel') {
 			for (const delta of [event.deltaX, event.deltaY]) {
 				if (typeof delta !== 'number' || !Number.isFinite(delta) || Math.abs(delta) > 10000) bad('Invalid wheel delta');
@@ -112,6 +131,9 @@ interface ControlSession {
 	sequence: number;
 	timer?: ReturnType<typeof setTimeout>;
 	onClose: () => void;
+	button?: 'left' | 'middle' | 'right';
+	clickCount?: number;
+	modifiers?: Modifier[];
 }
 
 /** A single, expiring controller per instance. Only input uses this bounded serial queue. */
@@ -178,17 +200,29 @@ export class BrowserInput {
 		clearTimeout(session.timer);
 		session.page.off('close', session.onClose);
 		return this.enqueue(async () => {
-			await this.releaseKeys(session.page);
+			await this.releaseKeys(session);
 			return { completed: true };
 		}, false);
 	}
 
-	private async releaseKeys(page: Page): Promise<void> {
-		for (const key of ['Alt', 'Control', 'Meta', 'Shift']) await page.keyboard.up(key).catch(() => {});
-		for (const button of ['left', 'middle', 'right'] as const) await page.mouse.up({ button }).catch(() => {});
+	private async releaseKeys(session: ControlSession): Promise<void> {
+		const page = session.page;
+		// End a held gesture at its last position; moving it during cleanup would change sliders or selections.
+		if (session.button) {
+			await page.mouse.up({ button: session.button }).catch(() => {});
+		}
+		// An unsolicited middle-button up can paste the primary selection on Linux.
+		// Atomic click/key operations release themselves; clean up only this session's held state.
+		for (const key of session.modifiers || []) await page.keyboard.up(key).catch(() => {});
+		session.button = undefined;
+		session.modifiers = undefined;
 	}
 
-	submit(value: unknown): Promise<{ completed: boolean; sequence: number }> {
+	submit(value: unknown): Promise<{
+		completed: boolean;
+		sequence: number;
+		inspections?: { requestId: number; element: BrowserElement | null }[];
+	}> {
 		const batch = browserInputBatch(value);
 		const session = this.current;
 		return this.enqueue(async () => {
@@ -205,9 +239,21 @@ export class BrowserInput {
 			// Reserve before executing: a partially completed batch must never be replayed.
 			session.sequence = batch.sequence;
 			this.renew(session);
+			const inspections: { requestId: number; element: BrowserElement | null }[] = [];
 			try {
 				for (const event of batch.events) {
 					if (this.current !== session) throw new ApiError(409, 'CONTROL_EXPIRED', 'Control session has ended');
+					if (session.button && !['move', 'pointer-up', 'pointer-cancel'].includes(event.type))
+						throw new ApiError(409, 'INPUT_INVALID_STATE', 'Release the pointer before another operation');
+					if (event.type === 'inspect') {
+						const element = await inspectBrowserElement(
+							session.page,
+							event.x * session.viewport.width,
+							event.y * session.viewport.height
+						);
+						inspections.push({ requestId: event.requestId, element });
+						continue;
+					}
 					await this.apply(session, event);
 				}
 			} catch (error) {
@@ -215,12 +261,18 @@ export class BrowserInput {
 				void this.stop(session.pageId, session.id).catch(() => {});
 				throw error;
 			}
-			return { completed: true, sequence: batch.sequence };
+			return { completed: true, sequence: batch.sequence, ...(inspections.length ? { inspections } : {}) };
 		});
 	}
 
 	private async apply(session: ControlSession, event: BrowserInputEvent): Promise<void> {
 		const page = session.page;
+		if (event.type === 'pointer-cancel') {
+			if (session.button) await this.releaseKeys(session);
+			else await page.mouse.move(-1, -1);
+			return;
+		}
+		if (event.type === 'inspect') return;
 		if (event.type === 'text') {
 			await page.keyboard.insertText(event.text);
 			return;
@@ -235,6 +287,30 @@ export class BrowserInput {
 		}
 		const x = event.x * session.viewport.width;
 		const y = event.y * session.viewport.height;
+		if (event.type === 'move') {
+			await page.mouse.move(x, y, session.button ? { steps: 2 } : {});
+			return;
+		}
+		if (event.type === 'pointer-down') {
+			if (session.button) throw new ApiError(409, 'INPUT_INVALID_STATE', 'A pointer is already held');
+			session.button = event.button || 'left';
+			session.clickCount = event.clickCount || 1;
+			session.modifiers = event.modifiers || [];
+			await page.mouse.move(x, y);
+			for (const key of session.modifiers) await page.keyboard.down(key);
+			await page.mouse.down({ button: session.button, clickCount: session.clickCount });
+			return;
+		}
+		if (event.type === 'pointer-up') {
+			if (!session.button || session.button !== (event.button || 'left'))
+				throw new ApiError(409, 'INPUT_INVALID_STATE', 'No matching pointer is held');
+			await page.mouse.move(x, y, { steps: 2 });
+			await page.mouse.up({ button: session.button, clickCount: session.clickCount });
+			for (const key of session.modifiers || []) await page.keyboard.up(key);
+			session.button = undefined;
+			session.modifiers = undefined;
+			return;
+		}
 		if (event.type === 'wheel') {
 			await page.mouse.move(x, y);
 			await page.mouse.wheel(event.deltaX, event.deltaY);

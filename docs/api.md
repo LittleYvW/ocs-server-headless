@@ -97,8 +97,8 @@ PATCH 和 DELETE 要求实例处于 stopped 或 error 状态；运行中、启�
 | --- | --- | --- |
 | GET | `/api/v1/browsers/:id/pages` | 页面数组，每项包括 `id,url,title,automationRunning` |
 | POST | `/api/v1/browsers/:id/navigate` | `{"url":"https://example.com","pageId":"可选"}`，返回页面 `id,url,title` |
-| POST | `/api/v1/browsers/:id/click` | `{"selector":"button[type=submit]","pageId":"可选"}` |
-| POST | `/api/v1/browsers/:id/fill` | `{"selector":"input[name=username]","text":"内容","pageId":"可选"}` |
+| POST | `/api/v1/browsers/:id/click` | `{"selector":"button[type=submit]","pageId":"可选","framePath":["可选的外层 iframe 选择器"]}` |
+| POST | `/api/v1/browsers/:id/fill` | `{"selector":"input[name=username]","text":"内容","pageId":"可选","framePath":[]}` |
 | GET | `/api/v1/browsers/:id/screenshot?pageId=...` | `image/png`；pageId 可选 |
 | POST | `/api/v1/browsers/:id/new-page` | `{"url":"可选，默认 about:blank"}` |
 | POST | `/api/v1/browsers/:id/close-page` | `{"pageId":"必填"}` |
@@ -122,11 +122,22 @@ PATCH 和 DELETE 要求实例处于 stopped 或 error 状态；运行中、启�
   {"type":"click","x":0.25,"y":0.4,"button":"left"},
   {"type":"text","text":"中文内容"},
   {"type":"key","key":"KeyA","modifiers":["ControlOrMeta"]},
-  {"type":"wheel","x":0.5,"y":0.5,"deltaX":0,"deltaY":240}
+  {"type":"wheel","x":0.5,"y":0.5,"deltaX":0,"deltaY":240},
+  {"type":"move","x":0.2,"y":0.3},
+  {"type":"pointer-down","x":0.2,"y":0.3,"button":"left"},
+  {"type":"move","x":0.6,"y":0.3},
+  {"type":"pointer-up","x":0.6,"y":0.3,"button":"left"},
+  {"type":"inspect","x":0.5,"y":0.5,"requestId":1}
 ]
 ```
 
 `x/y` 是相对于整张视口画面的归一化坐标，范围 `[0,1)`；worker 换算为视口 CSS 像素。MJPEG 各帧头的 `X-Viewport-Width/Height` 提供远端视口尺寸。`text` 每项限 10000 字符，滚轮各轴绝对值不超过 10000；修饰键支持 Alt/Control/ControlOrMeta/Meta/Shift。文本提交到远端当前焦点，不记录到事件或普通日志。
+
+`move` 支持悬停；`pointer-down/move/pointer-up` 可跨批次完成拖拽，按下时的按钮、点击次数与修饰键保持到松开。`clickCount` 可为 1/2，用于单击/双击；`{"type":"pointer-cancel"}` 结束当前手势并释放实际按住的按钮和修饰键。鼠标按下期间只接收移动、松开、取消和空心跳，不接受文字或其他动作；失焦、切页、关闭页面或租约回收会在最后位置松开鼠标，避免额外移动改变滑块或选区。
+
+`inspect` 不触发远端点击，也不读取输入值或页面正文；它只在同一个控制会话的有序队列中执行固定的 DOM 命中检查。返回 `inspections:[{requestId,element}]`；`element` 为空或包含 `selector,framePath,tag,bounds`，bounds 是相对于主视口的 CSS 像素矩形。拾取支持普通 DOM、开放 Shadow DOM 和 iframe（包括跨源、带边框和轴向缩放的 iframe）；封闭 Shadow DOM 不展开，旋转等复杂 iframe 变换不支持内部拾取。选择器会验证唯一性与节点一致性，DOM 在变化时可能返回空结果，需重新拾取。
+
+`framePath` 从外到内列出 iframe 选择器，最多 8 层，每项不超过 2000 字符；click/fill/press/check/select 均可带该字段。控制台可将拾取结果直接用于高级点击/填充，框架范围随结果带入，切换标签页时清空。定位信息和拾取矩形均不进入事件日志。
 
 每实例仅允许一个控制会话，15 秒无输入即过期；空 `events` 可作为心跳。`sequence` 从 1 连续递增，重复上一批仅确认，不重放；其他乱序请求返回 `INPUT_OUT_OF_ORDER`。请求必须始终使用申请时的 pageId/sessionId；切页应先释放旧会话。窗口失焦、隐藏、停止预览或退出页面时控制台释放控制；异常断网由租约回收。控制中的页面关闭后立即失效，视口尺寸改变后需重新申请控制。内置自动化正在操作的页面拒绝人工输入和修改操作，截图/预览仍可读取。
 

@@ -126,12 +126,30 @@ describe('management API', () => {
 		for (const events of [
 			[{ type: 'evaluate', code: 'private' }],
 			[{ type: 'click', x: 1, y: 0 }],
+			[{ type: 'pointer-down', x: 0.5, y: 0.5, property: 'evaluate' }],
+			[{ type: 'inspect', x: 0.5, y: 0.5, requestId: 'script' }],
 			[{ type: 'text', text: 'x'.repeat(10001) }]
 		]) {
 			expect((await request(route + '/input', 'POST', { ...input, events })).status).toBe(400);
 		}
 		expect((await request(route + '/input', 'POST', input)).status).toBe(409);
 		expect((await request(route + '/control', 'DELETE', { pageId: 'page' })).status).toBe(400);
+		for (const framePath of ['iframe', [1], Array(9).fill('iframe'), ['x'.repeat(2001)]]) {
+			expect(
+				(await request(route + '/fill', 'POST', { pageId: 'page', selector: 'input', text: 'bounded', framePath }))
+					.status
+			).toBe(400);
+		}
+		expect(
+			(
+				await request(route + '/fill', 'POST', {
+					pageId: 'page',
+					selector: 'input',
+					text: 'bounded',
+					framePath: ['iframe']
+				})
+			).status
+		).toBe(409);
 	});
 	it('rejects malformed JSON, unsafe download paths, and missing resources', async () => {
 		const response = await fetch(base + '/api/v1/browsers', { method: 'POST', headers, body: '{' });

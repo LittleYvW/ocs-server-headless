@@ -14,6 +14,7 @@ import { hostResources } from './resource';
 import { createScriptCatalogRouter } from './catalog';
 import { ApiError, bad, missing, object, fields, text, url, id, browserInput, publicBrowser } from './validation';
 import { browserInputBatch } from './browser-input';
+import { browserFramePath } from './browser-target';
 import { createQuestionBankManagementRouter, createQuestionBankQueryRouter } from './question-bank';
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
@@ -220,13 +221,14 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 					action === 'navigate'
 						? ['url', 'pageId']
 						: action === 'click'
-						? ['selector', 'pageId']
-						: ['selector', 'text', 'pageId']
+						? ['selector', 'pageId', 'framePath']
+						: ['selector', 'text', 'pageId', 'framePath']
 				);
-				const payload: Record<string, string> = {};
+				const payload: Record<string, unknown> = {};
 				if (body.pageId !== undefined) payload.pageId = text(body.pageId, 'pageId', 100);
 				if (action === 'navigate') payload.url = url(body.url);
 				else payload.selector = text(body.selector, 'selector', 2000);
+				if (action !== 'navigate' && body.framePath !== undefined) payload.framePath = browserFramePath(body.framePath);
 				if (action === 'fill') {
 					if (typeof body.text !== 'string' || body.text.length > 100000) bad('Invalid text');
 					payload.text = body.text;
@@ -294,6 +296,7 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 						? ['url']
 						: [
 								'pageId',
+								...(['press', 'check', 'select'].includes(action) ? ['framePath'] : []),
 								...(action === 'press'
 									? ['selector', 'key']
 									: action === 'check'
@@ -308,6 +311,7 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 				if (action === 'close-page' && !payload.pageId) bad('pageId is required');
 				if (action === 'new-page') payload.url = body.url === undefined ? 'about:blank' : url(body.url);
 				if (['press', 'check', 'select'].includes(action)) payload.selector = text(body.selector, 'selector', 2000);
+				if (body.framePath !== undefined) payload.framePath = browserFramePath(body.framePath);
 				if (action === 'press') payload.key = text(body.key, 'key', 100);
 				if (action === 'check') {
 					if (body.checked !== undefined && typeof body.checked !== 'boolean') bad('checked must be boolean');

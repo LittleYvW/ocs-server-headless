@@ -14,6 +14,7 @@ function fixture() {
 		},
 		mouse: {
 			click: vi.fn(async () => {}),
+			down: vi.fn(async () => {}),
 			move: vi.fn(async () => {}),
 			wheel: vi.fn(async () => {}),
 			up: vi.fn(async () => {})
@@ -25,6 +26,55 @@ function fixture() {
 afterEach(() => vi.useRealTimers());
 
 describe('direct browser input', () => {
+	it('keeps a held pointer and modifiers across batches, then releases them in order', async () => {
+		const page = fixture();
+		const input = new BrowserInput();
+		const { pageId, sessionId } = await input.start(page as any, 'drag');
+		try {
+			await input.submit({
+				pageId,
+				sessionId,
+				sequence: 1,
+				events: [{ type: 'pointer-down', x: 0.1, y: 0.2, modifiers: ['Shift'] }]
+			});
+			expect(page.mouse.down).toHaveBeenCalledWith({ button: 'left', clickCount: 1 });
+			expect(page.keyboard.up).not.toHaveBeenCalled();
+			await input.submit({ pageId, sessionId, sequence: 2, events: [{ type: 'move', x: 0.5, y: 0.4 }] });
+			expect(page.mouse.move).toHaveBeenLastCalledWith(682.5, 360, { steps: 2 });
+			await input.submit({ pageId, sessionId, sequence: 3, events: [{ type: 'pointer-up', x: 0.7, y: 0.4 }] });
+			expect(page.mouse.up).toHaveBeenCalledWith({ button: 'left', clickCount: 1 });
+			expect(page.keyboard.up).toHaveBeenCalledWith('Shift');
+			await input.submit({ pageId, sessionId, sequence: 4, events: [{ type: 'text', text: 'after release' }] });
+			expect(page.keyboard.insertText).toHaveBeenCalledWith('after release');
+		} finally {
+			await input.stop();
+		}
+	});
+
+	it('releases a held pointer without moving it on lost ownership and accepts a fresh session', async () => {
+		const page = fixture();
+		const input = new BrowserInput();
+		const first = await input.start(page as any, 'drag');
+		await input.submit({
+			pageId: first.pageId,
+			sessionId: first.sessionId,
+			sequence: 1,
+			events: [{ type: 'pointer-down', x: 0.5, y: 0.5 }]
+		});
+		await input.stop(first.pageId, first.sessionId);
+		expect(page.mouse.move).toHaveBeenLastCalledWith(682.5, 450);
+		expect(page.mouse.up).toHaveBeenCalledWith({ button: 'left' });
+		const next = await input.start(page as any, 'next');
+		await expect(
+			input.submit({
+				pageId: next.pageId,
+				sessionId: next.sessionId,
+				sequence: 1,
+				events: [{ type: 'pointer-up', x: 0.5, y: 0.5 }]
+			})
+		).rejects.toMatchObject({ code: 'INPUT_INVALID_STATE' });
+		await input.stop();
+	});
 	it('maps normalized image coordinates to viewport CSS pixels and supports text, keys and wheels', async () => {
 		const page = fixture();
 		const input = new BrowserInput();
@@ -114,17 +164,33 @@ describe('direct browser input', () => {
 		const page = fixture();
 		const input = new BrowserInput(() => false, 150);
 		const first = await input.start(page as any, 'first');
+		await input.submit({
+			pageId: first.pageId,
+			sessionId: first.sessionId,
+			sequence: 1,
+			events: [{ type: 'pointer-down', x: 0.5, y: 0.5 }]
+		});
 		await expect(input.start(page as any, 'second')).rejects.toMatchObject({ code: 'CONTROL_BUSY' });
 		await vi.advanceTimersByTimeAsync(151);
 		await expect(
 			input.submit({ pageId: first.pageId, sessionId: first.sessionId, sequence: 1, events: [] })
 		).rejects.toMatchObject({ code: 'CONTROL_EXPIRED' });
-		expect(page.mouse.up).toHaveBeenCalledTimes(3);
+		expect(page.mouse.up).toHaveBeenCalledTimes(1);
+		expect(page.mouse.up).not.toHaveBeenCalledWith({ button: 'middle' });
+		expect(page.mouse.move).toHaveBeenLastCalledWith(682.5, 450);
 		const second = await input.start(page as any, 'second');
 		page.emit('close');
 		await expect(
 			input.submit({ pageId: second.pageId, sessionId: second.sessionId, sequence: 1, events: [] })
 		).rejects.toMatchObject({ code: 'CONTROL_EXPIRED' });
+	});
+	it('does not synthesize unheld buttons or modifiers when a viewer releases control', async () => {
+		const page = fixture();
+		const input = new BrowserInput();
+		const session = await input.start(page as any, 'readonly');
+		await input.stop(session.pageId, session.sessionId);
+		expect(page.mouse.up).not.toHaveBeenCalled();
+		expect(page.keyboard.up).not.toHaveBeenCalled();
 	});
 
 	it('rejects changing viewports and pages controlled by built-in automation', async () => {
@@ -146,6 +212,11 @@ describe('direct browser input', () => {
 		const batch = { pageId: 'page', sessionId: 'session', sequence: 1, events: [] as unknown[] };
 		for (const event of [
 			{ type: 'click', x: 1, y: 0 },
+			{ type: 'pointer-down', x: 0, y: 1 },
+			{ type: 'pointer-up', x: 0, y: 0, button: 'unknown' },
+			{ type: 'move', x: Infinity, y: 0 },
+			{ type: 'pointer-cancel', x: 0 },
+			{ type: 'inspect', x: 0, y: 0, requestId: -1 },
 			{ type: 'click', x: -0.1, y: 0.5 },
 			{ type: 'wheel', x: 0, y: 0, deltaX: NaN, deltaY: 0 },
 			{ type: 'text', text: 'x'.repeat(10001) },

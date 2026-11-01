@@ -120,8 +120,32 @@ export type BrowserInputEvent =
 			modifiers?: InputModifier[];
 	  }
 	| { type: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }
+	| { type: 'move'; x: number; y: number }
+	| {
+			type: 'pointer-down' | 'pointer-up';
+			x: number;
+			y: number;
+			button?: 'left' | 'middle' | 'right';
+			clickCount?: number;
+			modifiers?: InputModifier[];
+	  }
+	| { type: 'pointer-cancel' }
+	| { type: 'inspect'; x: number; y: number; requestId: number }
 	| { type: 'key'; key: string; modifiers?: InputModifier[] }
 	| { type: 'text'; text: string };
+
+export interface BrowserElement {
+	selector: string;
+	framePath: string[];
+	tag: string;
+	bounds: { x: number; y: number; width: number; height: number };
+}
+
+export interface BrowserInputResult {
+	completed: boolean;
+	sequence: number;
+	inspections?: { requestId: number; element: BrowserElement | null }[];
+}
 
 export interface DownloadItem {
 	filename: string;

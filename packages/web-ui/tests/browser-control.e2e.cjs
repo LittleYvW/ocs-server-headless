@@ -33,15 +33,34 @@ async function main() {
 	button{position:absolute;left:550px;top:100px;width:160px;height:44px;font:20px system-ui}
 	#scroll{position:absolute;left:180px;top:250px;width:600px;height:200px;overflow:auto;background:#fff}
 	#scroll div{height:1200px;background:linear-gradient(#fff,#a0c8c0)}#status{position:absolute;top:170px;left:180px}</style>
+	<style>#hover{position:absolute;left:900px;top:100px;width:200px;height:60px;background:#bdd5cd}#hover-panel{display:none}#hover:hover #hover-panel{display:block}
+	#range{left:850px;top:250px;width:300px;height:40px}#drag{position:absolute;left:900px;top:370px;width:80px;height:50px;background:#8aacd0}
+	#drop{position:absolute;left:1100px;top:360px;width:180px;height:100px;border:2px dashed #527065}#shadow-host{position:absolute;left:850px;top:510px}
+	#embedded{position:absolute;left:850px;top:650px;width:460px;height:160px;border:4px solid #557;transform:scale(.8);transform-origin:top left}</style>
 	<h1>Remote input fixture</h1><input id="field" autocomplete="off"><button id="button">Submit</button><p id="status"></p>
+	<div id="hover">Hover here<div id="hover-panel">Hover opened</div></div><input id="range" type="range" min="0" max="100" value="0">
+	<div id="drag" draggable="true">Drag</div><div id="drop">Drop here</div><div id="shadow-host"></div><iframe id="embedded"></iframe>
 	<div id="scroll"><div>Scroll this panel</div></div><script>
-	let clicks=0,keys=[];const field=document.getElementById('field'),scroll=document.getElementById('scroll');
+	let clicks=0,doubles=0,drops=0,buttons=0,downs=0,keys=[];const field=document.getElementById('field'),scroll=document.getElementById('scroll');
+	const shadow=document.getElementById('shadow-host').attachShadow({mode:'open'});shadow.innerHTML='<input id="field" style="width:260px;height:44px;box-sizing:border-box;font:20px system-ui">';
+	document.getElementById('embedded').src='http://localhost:'+location.port+'/embedded';
+	document.getElementById('button').ondblclick=()=>doubles++;
+	for(const name of ['mousedown','mouseup','mousemove'])document.addEventListener(name,event=>buttons=event.buttons);
+	document.addEventListener('mousedown',()=>downs++);
+	document.getElementById('drag').ondragstart=event=>event.dataTransfer.setData('text/plain','drag-fixture');
+	document.getElementById('drop').ondragover=event=>event.preventDefault();
+	document.getElementById('drop').ondrop=event=>{event.preventDefault();if(event.dataTransfer.getData('text/plain')==='drag-fixture')drops++};
 	document.getElementById('button').onclick=()=>{clicks++;document.getElementById('status').textContent=field.value};
 	document.addEventListener('keydown',event=>keys.push(event.key));
-	setInterval(()=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:location.pathname,value:field.value,active:document.activeElement.id,clicks,keys:keys.slice(-50),scroll:scroll.scrollTop})}).catch(()=>{}),80);
+	setInterval(()=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:location.pathname,value:field.value,shadow:shadow.querySelector('input').value,active:document.activeElement.id,clicks,doubles,drops,buttons,downs,hover:getComputedStyle(document.getElementById('hover-panel')).display!=='none',range:document.getElementById('range').value,keys:keys.slice(-50),scroll:scroll.scrollTop})}).catch(()=>{}),80);
 	</script></html>`;
 	const fixture = http.createServer((req, res) => {
-		if (req.url === '/report') {
+		if (req.url === '/embedded') {
+			res.setHeader('Content-Type', 'text/html; charset=utf-8');
+			res.end(
+				`<!doctype html><html><style>body{margin:0;background:#e5ebf2}input{position:absolute;left:20px;top:20px;width:260px;height:36px;box-sizing:border-box}</style><input id="inside"><script>setInterval(()=>fetch('/report',{method:'POST',body:JSON.stringify({path:'/embedded',value:document.querySelector('input').value})}).catch(()=>{}),80)</script></html>`
+			);
+		} else if (req.url === '/report') {
 			let body = '';
 			req.on('data', (part) => {
 				body += part;
@@ -157,6 +176,131 @@ async function main() {
 		await until(() => reports.get('/first')?.scroll > 0, 'wheel targets the nested remote scroll panel');
 		console.log('  ✓ scaled clicks, ordered keys/text, IME, paste and nested scrolling');
 
+		const moveRemote = async (x, y, steps = 1) => {
+			await image.scrollIntoViewIfNeeded();
+			const box = await image.boundingBox();
+			await page.mouse.move(box.x + (x * box.width) / 1365, box.y + (y * box.height) / 900, { steps });
+		};
+		await moveRemote(1000, 125);
+		await until(() => reports.get('/first')?.hover, 'remote hover opens a CSS menu');
+		await image.dblclick({
+			position: {
+				x: (620 * (await image.boundingBox()).width) / 1365,
+				y: (120 * (await image.boundingBox()).height) / 900
+			}
+		});
+		await until(() => reports.get('/first')?.doubles === 1, 'double click emits exactly one remote dblclick');
+		await moveRemote(865, 270);
+		await page.mouse.down();
+		await moveRemote(1140, 270, 16);
+		await page.mouse.up();
+		await until(
+			() => Number(reports.get('/first')?.range) > 80 && reports.get('/first')?.buttons === 0,
+			'held range-slider drag and release'
+		);
+		await moveRemote(940, 395);
+		await page.mouse.down();
+		await moveRemote(1190, 410, 18);
+		await page.mouse.up();
+		await until(() => reports.get('/first')?.drops === 1, 'native HTML5 drag and drop');
+		const downsBeforeBlur = reports.get('/first').downs;
+		await moveRemote(1000, 270);
+		await page.mouse.down();
+		await until(
+			() => reports.get('/first')?.buttons === 1 && reports.get('/first')?.downs > downsBeforeBlur,
+			'remote button held before blur'
+		);
+		const valueBeforeBlur = reports.get('/first').range;
+		await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+		await page.mouse.up();
+		await until(() => reports.get('/first')?.buttons === 0, 'blur releases a held remote pointer');
+		assert.equal(
+			reports.get('/first').range,
+			valueBeforeBlur,
+			'cleanup does not move the slider away from the last pointer position'
+		);
+		console.log('  ✓ hover, double click, range drag, HTML5 drop and interrupted-drag cleanup');
+
+		const pickRemote = async (x, y) => {
+			await preview.getByRole('button', { name: '拾取元素', exact: true }).click();
+			await preview.getByRole('button', { name: '结束拾取', exact: true }).waitFor();
+			await moveRemote(x, y);
+			await clickRemote(x, y);
+			await preview.getByRole('button', { name: '用于填充', exact: true }).waitFor();
+			return preview.getByLabel('拾取的选择器', { exact: true }).inputValue();
+		};
+		const clicksBeforePick = reports.get('/first').clicks;
+		assert.ok((await pickRemote(320, 120)).length > 0);
+		const highlight = await preview.locator('.element-highlight').boundingBox();
+		const shot = await image.boundingBox();
+		assert.ok(Math.abs(highlight.x - shot.x - (180 * shot.width) / 1365) < 2, 'picker overlay follows scaled bounds');
+		assert.equal(reports.get('/first').clicks, clicksBeforePick, 'picking does not click the remote document');
+		await preview.getByLabel('拾取的选择器', { exact: true }).focus();
+		await page.keyboard.press('Escape');
+		await preview.getByRole('button', { name: '拾取元素', exact: true }).waitFor();
+		await pickRemote(320, 120);
+		await preview.getByRole('button', { name: '用于填充', exact: true }).click();
+		const fillPicked = async (text) => {
+			await page.locator('input[placeholder="临时输入值"]').fill(text);
+			await page.getByRole('button', { name: '填充', exact: true }).click();
+		};
+		await fillPicked('picked-main');
+		await until(
+			() => reports.get('/first')?.value === 'picked-main',
+			'picked selector fills the exact main-frame node despite a duplicate shadow ID'
+		);
+		assert.equal(reports.get('/first').shadow, '');
+		const shadowSelector = await pickRemote(980, 532);
+		assert.match(shadowSelector, /shadow-host/);
+		await preview.getByRole('button', { name: '用于填充', exact: true }).click();
+		await fillPicked('picked-shadow');
+		await until(() => reports.get('/first')?.shadow === 'picked-shadow', 'picked shadow selector is reusable');
+		const frameInfo = JSON.parse(await pickRemote(973, 684));
+		assert.deepEqual(frameInfo.framePath, ['css=#embedded']);
+		assert.equal(frameInfo.selector, 'css=#inside');
+		assert.equal(
+			await preview.getByLabel('远程键盘输入').evaluate(
+				(element) =>
+					!element.dispatchEvent(
+						new InputEvent('beforeinput', {
+							bubbles: true,
+							cancelable: true,
+							inputType: 'deleteContentBackward'
+						})
+					)
+			),
+			true,
+			'picker blocks editing keys from virtual keyboards'
+		);
+		const frameHighlight = await preview.locator('.element-highlight').boundingBox();
+		const frameShot = await image.boundingBox();
+		assert.ok(
+			Math.abs(frameHighlight.width - (208 * frameShot.width) / 1365) < 2,
+			'iframe highlight accounts for the frame CSS scale'
+		);
+		assert.ok(
+			Math.abs(frameHighlight.x - frameShot.x - (869.2 * frameShot.width) / 1365) < 2,
+			'iframe highlight accounts for scaled frame borders'
+		);
+		if (process.env.OCS_E2E_SHOTS) {
+			fs.mkdirSync(process.env.OCS_E2E_SHOTS, { recursive: true });
+			await page.screenshot({
+				path: path.join(process.env.OCS_E2E_SHOTS, 'browser-element-picker.png'),
+				fullPage: true
+			});
+		}
+		await preview.getByRole('button', { name: '用于填充', exact: true }).click();
+		await fillPicked('picked-frame');
+		await until(
+			() => reports.get('/embedded')?.value === 'picked-frame',
+			'picked cross-origin iframe selector is reusable'
+		);
+		assert.equal(reports.get('/first').value, 'picked-main');
+		assert.equal(await page.locator('.ops .inline-error').count(), 0);
+		console.log('  ✓ read-only picking, scaled overlay, shadow DOM and bordered/scaled cross-origin iframe targeting');
+		await preview.getByRole('button', { name: '直接操作', exact: true }).click();
+		await preview.getByRole('button', { name: '仅查看', exact: true }).waitFor();
+
 		if (process.env.OCS_E2E_SHOTS) {
 			fs.mkdirSync(process.env.OCS_E2E_SHOTS, { recursive: true });
 			await page.screenshot({ path: path.join(process.env.OCS_E2E_SHOTS, 'browser-control.png'), fullPage: true });
@@ -237,7 +381,7 @@ async function main() {
 		await page.locator('.shot img').waitFor();
 		const logs = JSON.stringify(await api('/logs'));
 		const disk = fs.readFileSync(path.join(directory, 'logs', 'events.jsonl'), 'utf8');
-		for (const text of ['stale-private-input', 'ordered中文粘贴发送', 'screencast-frame']) {
+		for (const text of ['stale-private-input', 'ordered中文粘贴发送', 'picked-frame', 'screencast-frame']) {
 			assert.equal(logs.includes(text), false);
 			assert.equal(disk.includes(text), false);
 		}

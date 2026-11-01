@@ -7,6 +7,7 @@ import type {
 	BrowserView,
 	BrowserControlSession,
 	BrowserInputEvent,
+	BrowserInputResult,
 	DownloadItem,
 	PageInfo,
 	QuestionBankClient,
@@ -71,7 +72,7 @@ export const api = {
 				signal: AbortSignal.timeout(5000)
 			}),
 		input: (id: string, session: BrowserControlSession, sequence: number, events: BrowserInputEvent[]) =>
-			request<{ completed: boolean; sequence: number }>(`${base}/browsers/${encodeURIComponent(id)}/input`, {
+			request<BrowserInputResult>(`${base}/browsers/${encodeURIComponent(id)}/input`, {
 				method: 'POST',
 				body: { pageId: session.pageId, sessionId: session.sessionId, sequence, events },
 				signal: AbortSignal.timeout(10000)
@@ -81,15 +82,15 @@ export const api = {
 				method: 'POST',
 				body: pageId ? { url, pageId } : { url }
 			}),
-		click: (id: string, selector: string, pageId?: string) =>
+		click: (id: string, selector: string, pageId?: string, framePath: string[] = []) =>
 			request<{ completed: boolean }>(`${base}/browsers/${encodeURIComponent(id)}/click`, {
 				method: 'POST',
-				body: pageId ? { selector, pageId } : { selector }
+				body: { selector, ...(pageId ? { pageId } : {}), ...(framePath.length ? { framePath } : {}) }
 			}),
-		fill: (id: string, selector: string, text: string, pageId?: string) =>
+		fill: (id: string, selector: string, text: string, pageId?: string, framePath: string[] = []) =>
 			request<{ completed: boolean }>(`${base}/browsers/${encodeURIComponent(id)}/fill`, {
 				method: 'POST',
-				body: pageId ? { selector, text, pageId } : { selector, text }
+				body: { selector, text, ...(pageId ? { pageId } : {}), ...(framePath.length ? { framePath } : {}) }
 			}),
 		screenshot: (id: string, pageId: string | undefined, options: BlobOptions = {}) =>
 			requestBlob(

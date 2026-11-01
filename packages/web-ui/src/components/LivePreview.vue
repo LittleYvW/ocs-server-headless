@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import BaseButton from './BaseButton.vue';
 import { apiBase, currentBearer } from '@/api/client';
 import { api } from '@/api/endpoints';
 import { describeError } from '@/api/errors';
-import type { BrowserControlSession, BrowserInputEvent, InputModifier } from '@/api/types';
+import type { BrowserControlSession, BrowserElement, BrowserInputEvent, InputModifier } from '@/api/types';
 import { InputChannel } from '@/lib/browser-input';
 
 const props = defineProps<{ browserId: string; pageId: string }>();
-const emit = defineEmits<{ active: [active: boolean]; changed: [] }>();
+const emit = defineEmits<{
+	active: [active: boolean];
+	changed: [];
+	picked: [target: BrowserElement & { pageId: string; action: 'click' | 'fill' }];
+}>();
 const active = ref(false);
 const image = ref('');
 const error = ref('');
@@ -19,6 +23,27 @@ const panel = ref<HTMLElement>();
 const keyboard = ref<HTMLTextAreaElement>();
 const draft = ref('');
 const viewport = ref<{ width: number; height: number }>();
+const picking = ref(false);
+const frozenPick = ref(false);
+const inspected = ref<BrowserElement | null>(null);
+const inspecting = ref(false);
+const dragging = ref(false);
+const pickerText = ref<HTMLTextAreaElement>();
+const overlay = computed(() => {
+	if (!picking.value || !inspected.value || !viewport.value) return undefined;
+	const { bounds } = inspected.value;
+	return {
+		left: `${(bounds.x / viewport.value.width) * 100}%`,
+		top: `${(bounds.y / viewport.value.height) * 100}%`,
+		width: `${(bounds.width / viewport.value.width) * 100}%`,
+		height: `${(bounds.height / viewport.value.height) * 100}%`
+	};
+});
+const pickedLocator = computed(() =>
+	inspected.value?.framePath.length
+		? JSON.stringify({ selector: inspected.value.selector, framePath: inspected.value.framePath }, null, 2)
+		: inspected.value?.selector || ''
+);
 let controller: AbortController | undefined;
 let session: BrowserControlSession | undefined;
 let sessionBrowserId = '';
@@ -28,8 +53,54 @@ let compositionTimer: ReturnType<typeof setTimeout> | undefined;
 let composing = false;
 let controlGeneration = 0;
 let controlTransition: Promise<void> = Promise.resolve();
+type Position = { x: number; y: number };
+let pointer:
+	| {
+			id: number;
+			target: HTMLImageElement;
+			button: 'left' | 'middle' | 'right';
+			count: number;
+			start: Position;
+			last: Position;
+			moved: boolean;
+	  }
+	| undefined;
+let lastClick: { time: number; position: Position; button: string; count: number } | undefined;
+let moveTimer: ReturnType<typeof setTimeout> | undefined;
+let pendingMove: Position | undefined;
+let inspectTimer: ReturnType<typeof setTimeout> | undefined;
+let pendingInspection: Position | undefined;
+let inspectionId = 0;
+
+function resetPointer(): void {
+	const previous = pointer;
+	pointer = undefined;
+	dragging.value = false;
+	try {
+		if (previous?.target.hasPointerCapture(previous.id)) previous.target.releasePointerCapture(previous.id);
+	} catch {
+		/* The image may already be detached. */
+	}
+}
+
+function resetPicker(): void {
+	inspectionId++;
+	clearTimeout(inspectTimer);
+	inspectTimer = undefined;
+	pendingInspection = undefined;
+	picking.value = false;
+	frozenPick.value = false;
+	inspected.value = null;
+	inspecting.value = false;
+}
 
 function stopControl(): void {
+	resetPointer();
+	resetPicker();
+	clearTimeout(moveTimer);
+	moveTimer = undefined;
+	pendingMove = undefined;
+	lastClick = undefined;
 	controlGeneration++;
 	controlBusy.value = false;
 	controlled.value = false;
@@ -83,8 +154,19 @@ async function startControl(): Promise<void> {
 		channel = new InputChannel(
 			async (sequence, events) => {
 				const result = await api.browsers.input(browserId, acquired, sequence, events);
-				if (session === acquired && events.some((event) => event.type === 'click' || event.type === 'key'))
+				if (session === acquired && events.some((event) => ['click', 'pointer-up', 'key'].includes(event.type)))
 					emit('changed');
+				if (session === acquired && picking.value) {
+					const latest = result.inspections?.find((result) => result.requestId === inspectionId);
+					if (latest) {
+						inspecting.value = false;
+						inspected.value = latest.element;
+						if (!latest.element && frozenPick.value) {
+							controlError.value = '此位置未找到可定位元素，可移动鼠标重试。';
+							frozenPick.value = false;
+						}
+					}
+				}
 				return result;
 			},
 			(caught) => {
@@ -118,7 +200,7 @@ function modifiers(event: MouseEvent | KeyboardEvent): InputModifier[] {
 	return keys;
 }
 
-function point(event: MouseEvent): { x: number; y: number } | undefined {
+function point(event: MouseEvent, clamp = false): Position | undefined {
 	if (!controlled.value || !session || !(event.currentTarget instanceof HTMLImageElement)) return;
 	if (viewport.value?.width !== session.viewport.width || viewport.value?.height !== session.viewport.height) {
 		controlError.value = '远端画面尺寸已变化，请重新开启直接操作。';
@@ -127,30 +209,175 @@ function point(event: MouseEvent): { x: number; y: number } | undefined {
 	}
 	// The image has its natural aspect ratio, without object-fit letterboxing.
 	const bounds = event.currentTarget.getBoundingClientRect();
-	const x = (event.clientX - bounds.left) / bounds.width;
-	const y = (event.clientY - bounds.top) / bounds.height;
+	let x = (event.clientX - bounds.left) / bounds.width;
+	let y = (event.clientY - bounds.top) / bounds.height;
+	if (clamp) {
+		x = Math.max(0, Math.min(0.999999, x));
+		y = Math.max(0, Math.min(0.999999, y));
+	}
 	if (bounds.width && bounds.height && x >= 0 && y >= 0 && x < 1 && y < 1) return { x, y };
 }
 
-function click(event: MouseEvent, button: 'left' | 'right' = 'left'): void {
-	const position = point(event);
+function inspect(position: Position, freeze: boolean): void {
+	clearTimeout(inspectTimer);
+	inspectTimer = undefined;
+	pendingInspection = undefined;
+	frozenPick.value = freeze;
+	inspecting.value = true;
+	inspected.value = null;
+	enqueue({ type: 'inspect', ...position, requestId: ++inspectionId });
+}
+
+function flushMove(): void {
+	clearTimeout(moveTimer);
+	moveTimer = undefined;
+	const position = pendingMove;
+	pendingMove = undefined;
+	if (position && !picking.value) enqueue({ type: 'move', ...position });
+}
+
+function pointerMove(event: PointerEvent): void {
+	const position = point(event, !!pointer);
 	if (!position) return;
+	if (picking.value) {
+		if (frozenPick.value) return;
+		pendingInspection = position;
+		if (!inspectTimer)
+			inspectTimer = setTimeout(() => {
+				inspectTimer = undefined;
+				if (pendingInspection) inspect(pendingInspection, false);
+			}, 100);
+		return;
+	}
+	if (pointer) {
+		if (pointer.id !== event.pointerId) return;
+		pointer.last = position;
+		if (Math.hypot(position.x - pointer.start.x, position.y - pointer.start.y) > 0.004) pointer.moved = true;
+	}
+	pendingMove = position;
+	if (!moveTimer) moveTimer = setTimeout(flushMove, 33);
+}
+
+function pointerDown(event: PointerEvent): void {
+	const position = point(event);
+	if (!position || pointer || !event.isPrimary || ![0, 1, 2].includes(event.button)) return;
 	event.preventDefault();
 	keyboard.value?.focus({ preventScroll: true });
-	enqueue({ type: 'click', ...position, button, modifiers: modifiers(event) });
+	if (picking.value) {
+		if (event.button === 0) inspect(position, true);
+		return;
+	}
+	const button = (['left', 'middle', 'right'] as const)[event.button];
+	const count =
+		lastClick &&
+		lastClick.count === 1 &&
+		lastClick.button === button &&
+		performance.now() - lastClick.time < 450 &&
+		Math.hypot(position.x - lastClick.position.x, position.y - lastClick.position.y) < 0.004
+			? 2
+			: 1;
+	flushMove();
+	pointer = {
+		id: event.pointerId,
+		target: event.currentTarget as HTMLImageElement,
+		button,
+		count,
+		start: position,
+		last: position,
+		moved: false
+	};
+	dragging.value = true;
+	enqueue({ type: 'pointer-down', ...position, button, clickCount: count, modifiers: modifiers(event) });
+	try {
+		pointer.target.setPointerCapture(event.pointerId);
+	} catch {
+		cancelPointer();
+	}
+}
+
+function pointerUp(event: PointerEvent): void {
+	if (!pointer || pointer.id !== event.pointerId) return;
+	event.preventDefault();
+	const previous = pointer;
+	const position = point(event, true) || previous.last;
+	flushMove();
+	resetPointer();
+	enqueue({ type: 'pointer-up', ...position, button: previous.button });
+	lastClick = previous.moved
+		? undefined
+		: { time: performance.now(), position, button: previous.button, count: previous.count };
+}
+
+function cancelPointer(): void {
+	if (!pointer) return;
+	clearTimeout(moveTimer);
+	moveTimer = undefined;
+	pendingMove = undefined;
+	resetPointer();
+	lastClick = undefined;
+	enqueue({ type: 'pointer-cancel' });
+}
+
+function pointerLeave(): void {
+	if (pointer) return; // pointer capture still delivers the drag's final move/up outside the image
+	clearTimeout(moveTimer);
+	moveTimer = undefined;
+	pendingMove = undefined;
+	if (picking.value) {
+		if (!frozenPick.value) {
+			inspectionId++;
+			clearTimeout(inspectTimer);
+			inspectTimer = undefined;
+			pendingInspection = undefined;
+			inspected.value = null;
+			inspecting.value = false;
+		}
+	} else if (controlled.value) enqueue({ type: 'pointer-cancel' });
+}
+
+async function togglePicker(): Promise<void> {
+	if (picking.value) {
+		resetPicker();
+		return;
+	}
+	if (!controlled.value) await startControl();
+	if (!controlled.value || dragging.value) return;
+	clearTimeout(moveTimer);
+	moveTimer = undefined;
+	pendingMove = undefined;
+	resetPicker();
+	picking.value = true;
+	controlError.value = '';
+	keyboard.value?.focus({ preventScroll: true });
+}
+
+function usePicked(action: 'click' | 'fill'): void {
+	if (!inspected.value || !frozenPick.value || !session) return;
+	emit('picked', { ...inspected.value, pageId: session.pageId, action });
+}
+
+async function copyPicked(): Promise<void> {
+	try {
+		await navigator.clipboard.writeText(pickedLocator.value);
+	} catch {
+		pickerText.value?.select();
+		controlError.value = '定位信息已选中，可按 Ctrl+C 复制。';
+	}
 }
 
 function wheel(event: WheelEvent): void {
 	const position = point(event);
 	if (!position || !session) return;
 	event.preventDefault();
+	if (dragging.value || picking.value) return;
+	flushMove();
 	const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? session.viewport.height : 1;
 	const delta = (value: number) => Math.max(-10000, Math.min(10000, value * scale));
 	enqueue({ type: 'wheel', ...position, deltaX: delta(event.deltaX), deltaY: delta(event.deltaY) });
 }
 
 function sendText(value: string): void {
-	if (!value) return;
+	if (!value || picking.value || dragging.value) return;
 	if (value.length > 10000) {
 		controlError.value = '每次最多输入 10000 个字符。';
 		return;
@@ -173,11 +400,24 @@ function compositionEnd(): void {
 	compositionTimer = setTimeout(flushText, 0);
 }
 
+function cancelGesture(event: KeyboardEvent): void {
+	if (!controlled.value || event.key !== 'Escape') return;
+	if (event.ctrlKey && event.altKey) {
+		event.preventDefault();
+		event.stopPropagation();
+		stopControl();
+	} else if (picking.value || dragging.value) {
+		event.preventDefault();
+		event.stopPropagation();
+		if (picking.value) resetPicker();
+		else cancelPointer();
+	}
+}
+
 function keydown(event: KeyboardEvent): void {
 	if (!controlled.value || event.isComposing || composing || event.key === 'Process' || event.key === 'Dead') return;
-	if (event.ctrlKey && event.altKey && event.key === 'Escape') {
+	if (picking.value || dragging.value) {
 		event.preventDefault();
-		stopControl();
 		return;
 	}
 	if (['Control', 'Alt', 'Meta', 'Shift', 'CapsLock'].includes(event.key)) return;
@@ -210,6 +450,10 @@ function keydown(event: KeyboardEvent): void {
 }
 
 function beforeInput(event: Event): void {
+	if (picking.value || dragging.value) {
+		event.preventDefault();
+		return;
+	}
 	const input = event as InputEvent;
 	const key = (
 		{ deleteContentBackward: 'Backspace', deleteContentForward: 'Delete', insertLineBreak: 'Enter' } as Record<
@@ -361,7 +605,8 @@ defineExpose({ stopControl });
 	<section
 		ref="panel"
 		class="panel live-preview"
-		:class="{ 'is-controlled': controlled }"
+		:class="{ 'is-controlled': controlled, 'is-picking': picking }"
+		@keydown.capture="cancelGesture"
 	>
 		<header class="panel__head">
 			<span class="panel__title"
@@ -382,6 +627,13 @@ defineExpose({ stopControl });
 				>
 				<BaseButton
 					size="sm"
+					:variant="picking ? 'primary' : 'line'"
+					:disabled="!active || !image || controlBusy || dragging"
+					@click="togglePicker"
+					>{{ picking ? '结束拾取' : '拾取元素' }}</BaseButton
+				>
+				<BaseButton
+					size="sm"
 					:disabled="!image"
 					@click="fullscreen"
 					>全屏</BaseButton
@@ -395,15 +647,30 @@ defineExpose({ stopControl });
 			</div>
 		</header>
 		<div class="live-preview__surface">
-			<img
-				v-if="image"
-				:src="image"
-				alt="浏览器实时画面"
-				:draggable="false"
-				@click="click($event)"
-				@contextmenu="click($event, 'right')"
-				@wheel="wheel"
-			/>
+			<div class="live-preview__viewport">
+				<img
+					v-if="image"
+					:src="image"
+					alt="浏览器实时画面"
+					:draggable="false"
+					@pointerdown="pointerDown"
+					@pointermove="pointerMove"
+					@pointerup="pointerUp"
+					@pointercancel="cancelPointer"
+					@lostpointercapture="cancelPointer"
+					@pointerleave="pointerLeave"
+					@contextmenu="controlled && $event.preventDefault()"
+					@wheel="wheel"
+				/>
+				<div
+					v-if="overlay"
+					class="element-highlight"
+					:style="overlay"
+					aria-hidden="true"
+				>
+					<span>{{ inspected?.tag }}</span>
+				</div>
+			</div>
 			<textarea
 				ref="keyboard"
 				class="remote-keyboard"
@@ -421,8 +688,56 @@ defineExpose({ stopControl });
 				@paste="paste"
 			></textarea>
 		</div>
+		<div
+			v-if="picking"
+			class="element-picker"
+		>
+			<p class="live-preview__hint">
+				{{ inspecting ? '正在定位元素…' : frozenPick ? '已选中元素' : '移动鼠标查看元素，单击选中；Esc 退出拾取。' }}
+			</p>
+			<template v-if="frozenPick && inspected && !inspecting">
+				<label class="field"
+					><span class="field__label">{{
+						inspected.framePath.length ? '拾取的定位信息（含框架范围）' : '拾取的选择器'
+					}}</span
+					><textarea
+						ref="pickerText"
+						class="element-selector mono"
+						:value="pickedLocator"
+						aria-label="拾取的选择器"
+						readonly
+						rows="2"
+					></textarea>
+				</label>
+				<div class="live-preview__tools">
+					<BaseButton
+						size="sm"
+						@click="copyPicked"
+						>复制定位信息</BaseButton
+					>
+					<BaseButton
+						size="sm"
+						@click="usePicked('click')"
+						>用于点击</BaseButton
+					>
+					<BaseButton
+						size="sm"
+						@click="usePicked('fill')"
+						>用于填充</BaseButton
+					>
+					<BaseButton
+						size="sm"
+						@click="
+							resetPicker();
+							picking = true;
+						"
+						>重新拾取</BaseButton
+					>
+				</div>
+			</template>
+		</div>
 		<form
-			v-if="controlled"
+			v-if="controlled && !picking"
 			class="live-preview__text"
 			@submit.prevent="submitDraft"
 		>
@@ -441,10 +756,10 @@ defineExpose({ stopControl });
 			>
 		</form>
 		<p
-			v-if="controlled"
+			v-if="controlled && !picking"
 			class="live-preview__hint"
 		>
-			点击画面后可输入、滚动；Ctrl + Alt + Esc 退出直接操作。
+			可悬停、拖拽、双击和输入；Ctrl + Alt + Esc 退出直接操作。
 		</p>
 		<p
 			v-if="active && !image"
@@ -537,9 +852,52 @@ defineExpose({ stopControl });
 .live-preview .panel__title .tag {
 	margin-left: 8px;
 }
-.live-preview:fullscreen img {
+.live-preview:fullscreen .live-preview__viewport {
 	max-width: 1365px;
 	margin: 0 auto;
+}
+.live-preview__viewport {
+	position: relative;
+	overflow: hidden;
+}
+.is-controlled img {
+	touch-action: none;
+	cursor: default;
+}
+.is-picking img {
+	cursor: crosshair;
+}
+.element-highlight {
+	position: absolute;
+	pointer-events: none;
+	border: 1px solid var(--accent);
+	background: var(--accent-soft);
+}
+.element-highlight span {
+	position: absolute;
+	left: 0;
+	top: 0;
+	padding: 2px 5px;
+	background: var(--ink-2);
+	color: var(--accent);
+	font-size: 10px;
+}
+.element-picker {
+	display: grid;
+	gap: 12px;
+	padding: 14px 16px;
+}
+.element-picker .live-preview__hint {
+	padding: 0;
+}
+.element-selector {
+	width: 100%;
+	resize: vertical;
+	padding: 8px;
+	color: var(--text-1);
+	background: transparent;
+	border: 1px solid var(--line-2);
+	font-size: 11px;
 }
 .live-preview img {
 	display: block;

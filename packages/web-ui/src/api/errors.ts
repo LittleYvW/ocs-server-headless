@@ -13,6 +13,7 @@ const messages: Record<string, string> = {
 	CONTROL_VIEW_CHANGED: '远端画面尺寸已变化，请重新开启直接操作。',
 	INPUT_OUT_OF_ORDER: '输入顺序已失效，请重新开启直接操作。',
 	INPUT_BUSY: '操作积压，请稍后重新开启直接操作。',
+	INPUT_INVALID_STATE: '鼠标状态已失效，请重新开启直接操作。',
 	AUTOMATION_BUSY: '此页面正在执行内置自动化，完成后可操作。',
 	PREVIEW_BUSY: '此实例已有实时预览，请关闭后重试。',
 	BROWSER_TIMEOUT: '浏览器操作超时，稍后重试。',
