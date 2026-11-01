@@ -9,6 +9,17 @@ import type {
 	BrowserInputEvent,
 	DownloadItem,
 	PageInfo,
+	QuestionBankClient,
+	QuestionBankConnection,
+	QuestionBankFolder,
+	QuestionBankImportResult,
+	QuestionBankLog,
+	QuestionBankModelConfig,
+	QuestionBankQuestion,
+	QuestionBankQuestionPage,
+	QuestionBankSettings,
+	QuestionBankStatus,
+	QuestionInput,
 	RuntimeState,
 	ScriptPayload,
 	ScriptUpdateCheck,
@@ -137,5 +148,68 @@ export const api = {
 		get: () => request<SettingsPayload>(`${base}/settings`),
 		update: (ocs: Record<string, unknown>) =>
 			request<SettingsPayload>(`${base}/settings`, { method: 'PATCH', body: { ocs } })
+	},
+
+	/**
+	 * Question bank administration. The gateway adds the internal service token;
+	 * the browser never sees it. Query credentials are issued by /connections and
+	 * are only used by the independent query probe in api/question-query.ts.
+	 */
+	questionBank: {
+		status: (signal?: AbortSignal) => request<QuestionBankStatus>(`${base}/question-bank/status`, { signal }),
+		settings: {
+			get: (signal?: AbortSignal) => request<QuestionBankSettings>(`${base}/question-bank/settings`, { signal }),
+			update: (
+				patch: Partial<Omit<QuestionBankSettings, 'model'>> & { model?: Partial<QuestionBankModelConfig> },
+				signal?: AbortSignal
+			) => request<QuestionBankSettings>(`${base}/question-bank/settings`, { method: 'PATCH', body: patch, signal })
+		},
+		clients: {
+			list: (signal?: AbortSignal) => request<QuestionBankClient[]>(`${base}/question-bank/tokens`, { signal }),
+			remove: (id: string) =>
+				request<void>(`${base}/question-bank/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' })
+		},
+		connections: {
+			create: (name: string, baseUrl: string, signal?: AbortSignal) =>
+				request<QuestionBankConnection>(`${base}/question-bank/connections`, {
+					method: 'POST',
+					body: { name, baseUrl },
+					signal
+				})
+		},
+		folders: {
+			list: (signal?: AbortSignal) => request<QuestionBankFolder[]>(`${base}/question-bank/folders`, { signal }),
+			create: (name: string, parentId: number) =>
+				request<QuestionBankFolder>(`${base}/question-bank/folders`, { method: 'POST', body: { name, parentId } }),
+			update: (id: number, name: string, parentId: number) =>
+				request<QuestionBankFolder>(`${base}/question-bank/folders/${id}`, {
+					method: 'PUT',
+					body: { name, parentId }
+				}),
+			remove: (id: number) => request<void>(`${base}/question-bank/folders/${id}`, { method: 'DELETE' })
+		},
+		questions: {
+			list: (params: { page: number; limit: number; folderId?: number | null; q?: string }, signal?: AbortSignal) => {
+				const search = new URLSearchParams({ page: String(params.page), limit: String(params.limit) });
+				if (typeof params.folderId === 'number') search.set('folderId', String(params.folderId));
+				if (params.q) search.set('q', params.q);
+				return request<QuestionBankQuestionPage>(`${base}/question-bank/questions?${search}`, { signal });
+			},
+			get: (id: number, signal?: AbortSignal) =>
+				request<QuestionBankQuestion>(`${base}/question-bank/questions/${id}`, { signal }),
+			create: (input: QuestionInput) =>
+				request<QuestionBankQuestion>(`${base}/question-bank/questions`, { method: 'POST', body: input }),
+			update: (id: number, input: QuestionInput) =>
+				request<QuestionBankQuestion>(`${base}/question-bank/questions/${id}`, { method: 'PUT', body: input }),
+			remove: (id: number) => request<void>(`${base}/question-bank/questions/${id}`, { method: 'DELETE' }),
+			import: (questions: QuestionInput[], signal?: AbortSignal) =>
+				request<QuestionBankImportResult>(`${base}/question-bank/questions/import`, {
+					method: 'POST',
+					body: { questions },
+					signal
+				})
+		},
+		logs: (limit = 100, signal?: AbortSignal) =>
+			request<QuestionBankLog[]>(`${base}/question-bank/logs?limit=${limit}`, { signal })
 	}
 };

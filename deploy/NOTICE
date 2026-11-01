@@ -3,3 +3,7 @@ https://github.com/microsoft/playwright/blob/v1.60.0/utils/docker/seccomp_profil
 
 Playwright is Copyright (c) Microsoft Corporation and is licensed under the Apache
 License, Version 2.0. The license is included in PLAYWRIGHT-LICENSE.
+
+The parallel question bank service includes MIT-licensed code from Miaozeqiu/ZError,
+Copyright (c) 2024 ZError. Its license and extraction record are included in the
+question bank image under /usr/share/doc/zerror-headless/.

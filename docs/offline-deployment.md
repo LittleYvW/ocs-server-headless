@@ -8,11 +8,13 @@
 
 ```bash
 docker build --tag ocs-server-headless:local .
+docker build --file services/zerror/Dockerfile --tag ocs-zerror-headless:local .
 bash scripts/test-container.sh ocs-server-headless:local
-bash scripts/package-container.sh ocs-server-headless:local
+bash scripts/test-question-bank-container.sh ocs-server-headless:local ocs-zerror-headless:local
+bash scripts/package-container.sh ocs-server-headless:local ocs-zerror-headless:local
 ```
 
-安装包位于本地 `releases/` 目录。这是手动生成的构建输出，不要求代码托管平台提供发布页或自动构建服务。
+安装包位于本地 `releases/` 目录，包含主服务和独立题库两个镜像。这是手动生成的构建输出，不要求代码托管平台提供发布页或自动构建服务。解压包内的 `QUESTION-BANK.md` 提供题库配置与迁移说明。
 
 ## 在目标服务器导入
 
@@ -44,10 +46,14 @@ docker compose up --detach --no-build --pull never --wait --wait-timeout 90
 
 ```bash
 docker compose stop
-docker compose cp ocs:/data "./backup-$(date +%Y%m%d-%H%M%S)"
+backup="./backup-$(date +%Y%m%d-%H%M%S)"
+mkdir "$backup"
+docker compose cp ocs:/data "$backup/ocs"
+docker compose cp zerror:/data "$backup/zerror"
+docker compose cp zerror:/credentials "$backup/zerror-credentials"
 docker compose start
 ```
 
 升级时先停止服务并备份，将新包解压到同一目录，保留 `.env`，再次执行 `bash install.sh --load-image`。本地构建默认使用 `local` 标签，因此应保留旧安装包；回滚前确认数据格式兼容，必要时恢复相应备份。
 
-配置数据库使用 AES-256-GCM 加密；浏览器 profile、Cookie、下载和日志不属于数据库加密范围。密钥缺失将无法解密配置。`docker compose down` 保留卷，添加 `--volumes` 会删除数据。
+主服务配置与题库模型配置使用 AES-256-GCM 加密；浏览器 profile、Cookie、下载、SQLite 题目和日志不属于该加密范围。题库与内部凭据位于额外的 `zerror-data/zerror-credentials` 卷，原有 `.ocsdata` 导出不包含它们。密钥缺失将无法解密配置。`docker compose down` 保留卷，添加 `--volumes` 会删除数据。

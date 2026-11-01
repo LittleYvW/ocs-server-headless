@@ -26,9 +26,9 @@ RUN node node_modules/playwright-core/cli.js install --with-deps --no-shell chro
     && apt-get update \
     && apt-get install --yes --no-install-recommends util-linux \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir /data \
-    && chown node:node /data \
-    && chmod 700 /data
+    && mkdir /data /run/zerror \
+    && chown node:node /data /run/zerror \
+    && chmod 700 /data /run/zerror
 COPY --chmod=755 deploy/container-entrypoint.sh /usr/local/bin/ocs-entrypoint
 USER node
 EXPOSE 15319

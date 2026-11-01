@@ -1,0 +1,26 @@
+[package]
+name = "zerror-headless"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "OCS-compatible standalone question bank extracted from ZError"
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+bytes = "1"
+futures-util = "0.3"
+fs2 = "0.4"
+jieba-rs = "0.8.1"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+sha2 = "0.10"
+strsim = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+warp = { version = "0.3", default-features = false }

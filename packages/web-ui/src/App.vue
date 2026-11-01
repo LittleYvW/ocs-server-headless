@@ -7,6 +7,7 @@ import SideRail from '@/components/SideRail.vue';
 import ConnectView from '@/views/ConnectView.vue';
 import { session, boot } from '@/stores/session';
 import { loadAll, resetService } from '@/stores/service';
+import { resetBank } from '@/stores/question-bank';
 import { startFeed, stopFeed } from '@/stores/events';
 
 watch(
@@ -18,6 +19,7 @@ watch(
 		} else {
 			stopFeed();
 			resetService();
+			resetBank();
 		}
 	}
 );

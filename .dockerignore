@@ -13,6 +13,10 @@
 !packages/web-ui/**
 !deploy/
 !deploy/container-entrypoint.sh
+!services/
+!services/zerror/
+!services/zerror/**
+services/zerror/target/
 **/node_modules
 **/data
 packages/common/lib

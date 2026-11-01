@@ -22,6 +22,8 @@ jobs:
           cache: pnpm
       - name: Install headless workspace
         run: pnpm install --frozen-lockfile
+      - name: Prepare Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt
       - name: Build backend
         run: pnpm build
       - name: Build web console
@@ -34,6 +36,10 @@ jobs:
         run: pnpm lint
       - name: Test backend and shared modules
         run: pnpm test
+      - name: Check Rust formatting and question bank integration
+        run: |
+          cargo fmt --manifest-path services/zerror/Cargo.toml --check
+          pnpm test:question-bank
       - name: Install Chromium and Linux libraries
         run: pnpm --filter @ocs-server/server exec playwright-core install --with-deps --no-shell chromium
       - name: Verify a real browser without a desktop session
@@ -50,5 +56,9 @@ jobs:
         run: docker compose --file deploy/compose.yaml config --quiet
       - name: Build the complete runtime image
         run: docker build --pull --tag ocs-server-headless:ci .
+      - name: Build the question bank image
+        run: docker build --pull --file services/zerror/Dockerfile --tag ocs-zerror-headless:ci .
+      - name: Verify both services and query credentials
+        run: bash scripts/test-question-bank-container.sh ocs-server-headless:ci ocs-zerror-headless:ci
       - name: Verify Chromium, non-root startup and crash recovery
         run: bash scripts/test-container.sh ocs-server-headless:ci

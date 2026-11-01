@@ -34,7 +34,7 @@ export function setUnauthorizedHandler(handler: (() => void) | undefined): void 
 }
 
 export interface RequestOptions {
-	method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+	method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 	body?: unknown;
 	signal?: AbortSignal;
 	/** Probes pass false so a wrong token does not tear down an existing session. */

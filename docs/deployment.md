@@ -2,7 +2,7 @@
 
 默认目标为 Linux x86_64 服务器。仓库只需提供完整源码，不要求有 Releases、Actions、镜像仓库账号或预构建产物。
 
-推荐通过 Docker 构建：宿主只需 bash、Docker Engine 和 Compose 插件，Node.js、前后端依赖、Chromium 及其系统库均在镜像构建阶段准备。首次构建需要能访问基础镜像、npm 和浏览器下载源。宿主内核需允许 Chromium sandbox 使用的非特权用户命名空间。
+推荐通过 Docker 构建：宿主只需 bash、Docker Engine 和 Compose 插件，Node.js、Rust、前后端依赖、Chromium 及其系统库均在镜像构建阶段准备。首次构建需要能访问基础镜像、npm、crates.io 和浏览器下载源。宿主内核需允许 Chromium sandbox 使用的非特权用户命名空间。
 
 ## 获取源码与首次启动
 
@@ -20,6 +20,7 @@ pnpm-lock.yaml
 packages/common/
 packages/server/
 packages/web-ui/
+services/zerror/
 deploy/
 ```
 
@@ -29,7 +30,7 @@ deploy/
 bash deploy/install.sh
 ```
 
-脚本会检查 Docker、保留或创建 `deploy/.env`、校验 Compose 配置，随后构建应用镜像。构建成功后才创建或更新服务；失败时不会停止已有服务。构建完成的镜像包含控制台和锁定 Playwright 所需的 Chromium。
+脚本会检查 Docker、保留或创建 `deploy/.env`、校验 Compose 配置，随后构建主服务和独立题库两个镜像。构建成功后才创建或更新服务；失败时不会停止已有服务。主服务镜像包含控制台和锁定 Playwright 所需的 Chromium，题库镜像包含 Rust HTTP 服务与 SQLite。题库配置、客户端接入和前端执行文档见 [独立题库服务](question-bank.md)。
 
 启动时会用临时 profile 验证浏览器与 sandbox，预检失败会退出。脚本等待 HTTP 健康后返回；服务重启后浏览器实例仍需在控制台重新启动。
 
@@ -102,11 +103,15 @@ docker compose start
 
 ## 备份、更新与回滚
 
-完整数据在 `ocs-server-headless_ocs-data` 卷中，包括配置数据库、密钥、令牌、profile、下载和日志。停止后备份：
+主服务数据在 `ocs-server-headless_ocs-data` 卷中，包括配置数据库、密钥、令牌、profile、下载和日志。独立题库与内部凭据另保存在 `zerror-data/zerror-credentials` 卷。停止后备份：
 
 ```bash
 docker compose stop
-docker compose cp ocs:/data "./backup-$(date +%Y%m%d-%H%M%S)"
+backup="./backup-$(date +%Y%m%d-%H%M%S)"
+mkdir "$backup"
+docker compose cp ocs:/data "$backup/ocs"
+docker compose cp zerror:/data "$backup/zerror"
+docker compose cp zerror:/credentials "$backup/zerror-credentials"
 docker compose start
 ```
 
@@ -130,7 +135,9 @@ docker compose start
 
 ```bash
 docker build --tag ocs-server-headless:local .
+docker build --file services/zerror/Dockerfile --tag ocs-zerror-headless:local .
 bash scripts/test-container.sh ocs-server-headless:local
+bash scripts/test-question-bank-container.sh ocs-server-headless:local ocs-zerror-headless:local
 ```
 
 若目标机器无法访问构建下载源，可在另一台联网机器从源码构建，再手动导出镜像。这个可选流程见 [离线部署](offline-deployment.md)。已有工作流仅用于可选检查和打包；没有自动构建服务也可使用仓库中的全部本地命令。

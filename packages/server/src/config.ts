@@ -16,6 +16,7 @@ export interface ServerConfig {
 	extensions: string[];
 	ocrUrl?: string;
 	scriptManagerUrl?: string;
+	questionBank?: { url: string; tokenFile: string };
 	keyFile: string;
 	/** Optional console build. Missing files simply fall through to API 404s. */
 	webDir: string;
@@ -75,6 +76,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 			throw new Error(`${key} must be an http/https URL without credentials`);
 		}
 	}
+	let questionBank: ServerConfig['questionBank'];
+	if (env.OCS_QUESTION_BANK_URL) {
+		const endpoint = new URL(env.OCS_QUESTION_BANK_URL);
+		if (
+			!['http:', 'https:'].includes(endpoint.protocol) ||
+			!endpoint.hostname ||
+			endpoint.username ||
+			endpoint.password ||
+			endpoint.search ||
+			endpoint.hash ||
+			endpoint.pathname !== '/' ||
+			!env.OCS_QUESTION_BANK_TOKEN_FILE ||
+			!path.isAbsolute(env.OCS_QUESTION_BANK_TOKEN_FILE)
+		)
+			throw new Error('Question bank requires an HTTP origin and an absolute internal token file');
+		questionBank = { url: endpoint.origin, tokenFile: env.OCS_QUESTION_BANK_TOKEN_FILE };
+	} else if (env.OCS_QUESTION_BANK_TOKEN_FILE) {
+		throw new Error('OCS_QUESTION_BANK_TOKEN_FILE requires OCS_QUESTION_BANK_URL');
+	}
 	return {
 		host,
 		port: integer(env.OCS_PORT, 15319, 0, 65535),
@@ -88,6 +108,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 		extensions: extensions as string[],
 		ocrUrl: env.OCS_OCR_URL || undefined,
 		scriptManagerUrl: env.OCS_SCRIPT_MANAGER_URL || undefined,
+		questionBank,
 		keyFile: path.resolve(env.OCS_ENCRYPTION_KEY_FILE || path.join(dataDir, 'encryption.key')),
 		webDir: path.resolve(env.OCS_WEB_DIR || path.join(__dirname, '..', 'web'))
 	};

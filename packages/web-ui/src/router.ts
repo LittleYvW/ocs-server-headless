@@ -5,6 +5,7 @@ import InstanceView from './views/InstanceView.vue';
 import ScriptsView from './views/ScriptsView.vue';
 import SettingsView from './views/SettingsView.vue';
 import EventsView from './views/EventsView.vue';
+import QuestionBankView from './views/QuestionBankView.vue';
 
 // Hash history keeps static hosting simple: no server-side SPA rewrites are
 // required, and the console works when reverse-proxied under a sub-path.
@@ -17,6 +18,12 @@ export const router = createRouter({
 		{ path: '/scripts', name: 'scripts', component: ScriptsView, meta: { title: '用户脚本' } },
 		{ path: '/settings', name: 'settings', component: SettingsView, meta: { title: '平台设置' } },
 		{ path: '/events', name: 'events', component: EventsView, meta: { title: '事件' } },
+		{
+			path: '/question-bank',
+			name: 'question-bank',
+			component: QuestionBankView,
+			meta: { title: '题库服务' }
+		},
 		{ path: '/:pathMatch(.*)*', redirect: '/' }
 	],
 	scrollBehavior: () => ({ top: 0 })

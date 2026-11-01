@@ -21,7 +21,9 @@
 		"typecheck:web": "pnpm --filter @ocs-server/web-ui typecheck",
 		"test:web": "pnpm --filter @ocs-server/web-ui test:e2e",
 		"test:browser": "pnpm build && pnpm --filter @ocs-server/server test:browser",
-		"test:managed-scripts": "pnpm build && pnpm --filter @ocs-server/server test:managed-scripts"
+		"test:managed-scripts": "pnpm build && pnpm --filter @ocs-server/server test:managed-scripts",
+		"build:question-bank": "cargo build --release --locked --manifest-path services/zerror/Cargo.toml",
+		"test:question-bank": "cargo test --locked --manifest-path services/zerror/Cargo.toml && cargo build --locked --manifest-path services/zerror/Cargo.toml && pnpm build && node --test packages/server/tests/question-bank.e2e.cjs"
 	},
 	"devDependencies": {
 		"@commitlint/cli": "^19.0.0",

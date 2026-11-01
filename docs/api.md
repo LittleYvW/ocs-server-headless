@@ -4,7 +4,7 @@ API 基路径为 `/api/v1`。管理客户端通过 HTTP 请求管理实例，通
 
 ## 认证与响应
 
-`GET /healthz` 返回简略进程健康信息，无需认证；其余接口均要求：
+`GET /healthz` 返回简略进程健康信息，无需认证；下文的 `/api/v1/*` 管理接口均要求：
 
 ```http
 Authorization: Bearer <管理令牌>
@@ -28,6 +28,8 @@ Content-Type: application/json
 常见 HTTP 状态包括 `400`（参数非法）、`401`（认证失败）、`403`（来源未允许）、`404`（资源不存在）、`409`（状态冲突或并发容量已满），以及浏览器操作失败的 `5xx`。客户端以 HTTP 状态和实际返回的 `error.code` 分支处理，不依赖中文消息内容。截图、文件下载和事件流返回各自的媒体类型。
 
 ## 控制台静态资源
+
+独立题库增加 `/api/v1/question-bank/*` 管理接口和使用独立查询令牌的公开 `/question-bank/query`。前者沿用本文管理认证及 Origin 规则，后者使用 OCS 自定义题库协议；完整字段、响应和错误约定见 [独立题库服务](question-bank.md)。该组管理接口默认返回 HTTP 200（包括删除的 `{data:null}`），连接配置创建返回 201。
 
 服务端在 `OCS_WEB_DIR`（默认 `packages/server/web`）存在 `index.html` 时，于同源根路径 `/` 提供控制台构建，并设置专用 CSP 与缓存头。控制台使用 hash 路由，不需要 SPA 重写；未知路径仍返回 JSON 404，API 路由不受影响。未构建前端时服务保持纯 API 行为。
 

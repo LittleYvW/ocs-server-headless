@@ -38,7 +38,7 @@ compose=(docker compose --project-directory "$PWD" --env-file "$PWD/.env" --file
 "${compose[@]}" config --quiet
 if [ "$mode" = source ]; then
   # A failed build leaves the existing service running. Recreate only after success.
-  "${compose[@]}" build --pull ocs
+  "${compose[@]}" build --pull ocs zerror
   documentation=../docs/deployment.md
 else
   sha256sum --check SHA256SUMS

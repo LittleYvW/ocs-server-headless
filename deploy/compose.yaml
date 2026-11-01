@@ -11,6 +11,9 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
+    depends_on:
+      zerror:
+        condition: service_healthy
     shm_size: 1gb
     cap_drop:
       - ALL
@@ -31,10 +34,41 @@ services:
       OCS_SCRIPT_MANAGER_URL: ${OCS_SCRIPT_MANAGER_URL:-}
       OCS_EXTENSIONS: '${OCS_EXTENSIONS:-[]}'
       OCS_ALLOWED_ORIGINS: ${OCS_ALLOWED_ORIGINS:-}
+      OCS_QUESTION_BANK_URL: http://zerror:3002
+      OCS_QUESTION_BANK_TOKEN_FILE: /run/zerror/admin.token
     ports:
       - '${OCS_BIND_ADDRESS:-127.0.0.1}:${OCS_PORT:-15319}:15319'
     volumes:
       - ocs-data:/data
+      - zerror-credentials:/run/zerror:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+  zerror:
+    image: ${ZERROR_IMAGE:-ocs-zerror-headless:local}
+    build:
+      context: ..
+      dockerfile: services/zerror/Dockerfile
+    pull_policy: build
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 65s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ZERROR_HOST: 0.0.0.0
+      ZERROR_PORT: '3002'
+      ZERROR_DATA_DIR: /data
+      ZERROR_ADMIN_TOKEN_FILE: /credentials/admin.token
+      ZERROR_MAX_CONCURRENT: ${ZERROR_MAX_CONCURRENT:-8}
+    volumes:
+      - zerror-data:/data
+      - zerror-credentials:/credentials
     logging:
       driver: json-file
       options:
@@ -43,3 +77,5 @@ services:
 
 volumes:
   ocs-data:
+  zerror-data:
+  zerror-credentials:

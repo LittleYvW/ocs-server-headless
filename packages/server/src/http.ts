@@ -14,6 +14,7 @@ import { hostResources } from './resource';
 import { createScriptCatalogRouter } from './catalog';
 import { ApiError, bad, missing, object, fields, text, url, id, browserInput, publicBrowser } from './validation';
 import { browserInputBatch } from './browser-input';
+import { createQuestionBankManagementRouter, createQuestionBankQueryRouter } from './question-bank';
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
@@ -36,6 +37,7 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 		next();
 	});
 	app.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
+	app.use('/question-bank', createQuestionBankQueryRouter(config));
 	app.use('/api/v1', (req, res, next) => {
 		const origin = req.get('origin');
 		const hostOrigin = `${req.protocol}://${req.get('host')}`;
@@ -48,7 +50,7 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 		}
 		if (req.method === 'OPTIONS') {
 			res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Last-Event-ID');
-			res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+			res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
 			return res.sendStatus(204);
 		}
 		const auth = req.get('authorization') || '';
@@ -63,6 +65,7 @@ export function createApp(config: ServerConfig, store: Store, runtime: Runtime, 
 	app.use('/api/v1', express.json({ limit: '1mb', strict: true }));
 	const api = express.Router();
 	app.use('/api/v1', api);
+	api.use('/question-bank', createQuestionBankManagementRouter(config));
 	const route = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
 		Promise.resolve()
 			.then(() => fn(req, res))

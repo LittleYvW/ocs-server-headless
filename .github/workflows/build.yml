@@ -21,12 +21,16 @@ jobs:
           cache: pnpm
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
+      - name: Prepare Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt
       - name: Build
         run: pnpm build
       - name: Build web console
         run: pnpm build:web
       - name: Run tests
         run: pnpm test
+      - name: Build and test the question bank
+        run: pnpm test:question-bank
       - name: Upload service build
         uses: actions/upload-artifact@v7
         with:
@@ -42,6 +46,12 @@ jobs:
             packages/server/package.json
             packages/server/dist/**
             packages/server/web/**
+            services/zerror/Cargo.toml
+            services/zerror/Cargo.lock
+            services/zerror/src/**
+            services/zerror/Dockerfile
+            services/zerror/LICENSE
+            services/zerror/UPSTREAM.md
             README.md
             docs/**
             deploy/**
@@ -56,8 +66,12 @@ jobs:
         run: docker build --pull --tag ocs-server-headless:${{ github.sha }} .
       - name: Verify the actual image and persistent volume
         run: bash scripts/test-container.sh ocs-server-headless:${{ github.sha }}
+      - name: Build the question bank image
+        run: docker build --pull --file services/zerror/Dockerfile --tag ocs-zerror-headless:${{ github.sha }} .
+      - name: Verify both services and query credentials
+        run: bash scripts/test-question-bank-container.sh ocs-server-headless:${{ github.sha }} ocs-zerror-headless:${{ github.sha }}
       - name: Export the offline deployment bundle
-        run: bash scripts/package-container.sh ocs-server-headless:${{ github.sha }}
+        run: bash scripts/package-container.sh ocs-server-headless:${{ github.sha }} ocs-zerror-headless:${{ github.sha }}
       - name: Upload container deployment bundle
         uses: actions/upload-artifact@v7
         with:

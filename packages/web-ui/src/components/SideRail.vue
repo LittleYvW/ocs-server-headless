@@ -13,7 +13,8 @@ const items = [
 	{ to: '/instances', label: '实例', index: '02', icon: 'browser' },
 	{ to: '/scripts', label: '用户脚本', index: '03', icon: 'code' },
 	{ to: '/settings', label: '平台设置', index: '04', icon: 'settings' },
-	{ to: '/events', label: '事件', index: '05', icon: 'events' }
+	{ to: '/events', label: '事件', index: '05', icon: 'events' },
+	{ to: '/question-bank', label: '题库服务', index: '06', icon: 'file' }
 ];
 
 const link = computed(() => {

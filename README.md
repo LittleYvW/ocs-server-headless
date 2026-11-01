@@ -6,6 +6,7 @@
 - 内置自动化、普通 JavaScript 和标准用户脚本，支持网络/文件导入、版本更新与脚本管理器安装。
 - OCS 配置同步、软件辅助动作、可配置 OCR、实时画面与鼠标/键盘控制、资源监测和加密数据导入导出。
 - 管理令牌认证、实时事件流、加密配置和持久化浏览器数据。
+- 并列托管独立题库服务，支持本地／外部 OCS 自定义题库调用、服务端文本 AI 和答案缓存。
 
 ![控制台概览](docs/images/console-overview.png)
 
@@ -32,7 +33,7 @@ docker compose version
 bash deploy/install.sh
 ```
 
-脚本会创建 `deploy/.env`、校验 Compose 配置、从源码构建镜像并等待服务健康。已有配置和数据卷会保留；构建失败时不会停止正在运行的旧服务。
+脚本会创建 `deploy/.env`、校验 Compose 配置、从源码构建主服务和独立题库两个镜像并等待服务健康。已有配置和数据卷会保留；构建失败时不会停止正在运行的旧服务。
 
 首次构建需要网络下载基础镜像、依赖和 Chromium。运行镜像包含完整前后端和浏览器环境，启动时不再下载这些依赖。缺少 `.github/` 目录或任何预构建产物不影响该流程。
 
@@ -72,6 +73,7 @@ ssh -L 15319:127.0.0.1:15319 user@server
 | `OCS_OCR_URL` | 空 | 容器可访问的兼容 OCR 服务地址 |
 | `OCS_SCRIPT_MANAGER_URL` | 空 | 可选脚本管理器 ZIP 镜像 |
 | `OCS_MIN_FREE_MEMORY_MB` / `OCS_MAX_CPU_PERCENT` | `0` | 启动资源阈值；0 表示关闭该项检查 |
+| `ZERROR_MAX_CONCURRENT` | `8` | 独立题库的查询并发上限 |
 
 仅修改配置时，在 `deploy/` 执行以下命令，使用已有镜像重新创建服务：
 
@@ -101,11 +103,15 @@ docker compose up --detach --no-build --pull never --wait --wait-timeout 90
 
 ```bash
 docker compose stop
-docker compose cp ocs:/data "./backup-$(date +%Y%m%d-%H%M%S)"
+backup="./backup-$(date +%Y%m%d-%H%M%S)"
+mkdir "$backup"
+docker compose cp ocs:/data "$backup/ocs"
+docker compose cp zerror:/data "$backup/zerror"
+docker compose cp zerror:/credentials "$backup/zerror-credentials"
 docker compose start
 ```
 
-配置数据库使用 AES-256-GCM 加密；浏览器 profile、Cookie、下载和日志不属于数据库加密范围。妥善保护完整备份并保留密钥，缺失密钥将无法解密已有配置。
+主服务配置数据库和题库模型配置使用 AES-256-GCM 加密；浏览器 profile、Cookie、下载、SQLite 题目和日志不属于该加密范围。妥善保护完整备份并保留密钥，缺失密钥将无法解密已有配置。题库卷与迁移说明见 [独立题库服务](docs/question-bank.md)。
 
 `docker compose down` 保留数据卷；添加 `--volumes` 会删除数据，不用于普通升级。
 
@@ -125,7 +131,9 @@ docker compose start
 
 ```bash
 docker build --tag ocs-server-headless:local .
+docker build --file services/zerror/Dockerfile --tag ocs-zerror-headless:local .
 bash scripts/test-container.sh ocs-server-headless:local
+bash scripts/test-question-bank-container.sh ocs-server-headless:local ocs-zerror-headless:local
 if [ ! -f deploy/.env ]; then cp deploy/.env.example deploy/.env; fi
 docker compose --env-file deploy/.env --file deploy/compose.yaml up --detach --no-build --pull never --wait --wait-timeout 90
 ```
@@ -159,6 +167,7 @@ OCS_DATA_DIR="$PWD/data" pnpm dev
 | `pnpm test:browser` | OCS 桥接、配置同步及实时预览的真实浏览器验证 |
 | `pnpm test:managed-scripts` | ScriptCat 安装、GM 存储、开关对账与完整管理 API 验证 |
 | `pnpm test:web` | 控制台端到端检查，需先构建后端和前端 |
+| `pnpm test:question-bank` | Rust 单元测试及真实题库／网关集成，需 Rust 工具链 |
 
 标准脚本、OCR、数据迁移及验证方式见 [后端兼容功能](docs/backend-compatibility.md)。
 
@@ -170,12 +179,15 @@ OCS_DATA_DIR="$PWD/data" pnpm dev
 packages/server/       HTTP 服务、浏览器进程监管与 worker
 packages/common/       共享类型、校验和内置自动化程序
 packages/web-ui/       Web 控制台，构建到 packages/server/web
+services/zerror/       独立 Rust 题库、SQLite 与服务端文本 AI
 scripts/              初始化、镜像验证与交付打包脚本
 deploy/               Compose、安装入口、配置示例与 systemd 模板
 docs/                 部署、API 和控制台文档
 ```
 
 当前 workspace 包含 `common`、`server` 和 `web-ui`。控制台由后端同源托管；原生 Node.js 部署时需单独执行 `pnpm build:web`，仅执行 `pnpm build` 不会生成控制台。默认 Docker 构建已包含这一步。
+
+独立题库通过 Compose 并列部署，不依赖浏览器实例；原生 Node.js 构建和运行仍可独立使用。题库初始 AI 关闭，可通过控制台“题库服务”页面（或管理 API）配置模型并生成 OCS 自定义题库配置，无需修改用户脚本源码。接口、凭据、备份和能力范围见 [独立题库服务](docs/question-bank.md)，页面行为与验收见 [题库服务前端执行文档](docs/question-bank-frontend-plan.md)。
 
 - 管理令牌为单管理员权限，当前不提供多用户、角色或租户隔离。
 - 用户脚本分为普通 JS 和标准 `.user.js`。标准脚本由 MV3 脚本管理器执行，支持其提供的 `GM_*`、`@require` 和元数据规则；首次需要管理器时自动下载并校验固定版本 ScriptCat，缓存于数据目录。可通过 `OCS_EXTENSIONS` 使用已有的 ScriptCat 1.5 管理器，或用 `OCS_SCRIPT_MANAGER_URL` 指定 ZIP 镜像。

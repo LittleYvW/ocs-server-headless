@@ -3,17 +3,21 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 image="${1:-ocs-server-headless:local}"
+question_bank_image="${2:-ocs-zerror-headless:local}"
 [[ "$image" =~ ^[a-zA-Z0-9._:/@-]+$ ]] || { echo 'Invalid image name.' >&2; exit 1; }
+[[ "$question_bank_image" =~ ^[a-zA-Z0-9._:/@-]+$ ]] || { echo 'Invalid question bank image name.' >&2; exit 1; }
 architecture=$(docker image inspect --format '{{.Architecture}}' "$image")
+[[ "$(docker image inspect --format '{{.Architecture}}' "$question_bank_image")" = "$architecture" ]] || { echo 'Image architectures must match.' >&2; exit 1; }
 revision="${GITHUB_SHA:-local}"
 [[ "$revision" =~ ^[a-f0-9]{40}$|^local$ ]] || { echo 'Invalid revision.' >&2; exit 1; }
 bundle=$(mktemp -d)
 trap 'rm -rf -- "$bundle"' EXIT
 cp deploy/install.sh deploy/.env.example deploy/seccomp-chromium.json deploy/NOTICE deploy/PLAYWRIGHT-LICENSE "$bundle/"
 cp docs/offline-deployment.md "$bundle/DEPLOYMENT.md"
-sed "s|ocs-server-headless:local|$image|" deploy/compose.yaml > "$bundle/compose.yaml"
-docker save "$image" | gzip > "$bundle/ocs-server-image.tar.gz"
-(cd "$bundle"; sha256sum install.sh .env.example seccomp-chromium.json NOTICE PLAYWRIGHT-LICENSE DEPLOYMENT.md compose.yaml ocs-server-image.tar.gz > SHA256SUMS)
+cp docs/question-bank.md "$bundle/QUESTION-BANK.md"
+sed -e "s|ocs-server-headless:local|$image|" -e "s|ocs-zerror-headless:local|$question_bank_image|" deploy/compose.yaml > "$bundle/compose.yaml"
+docker save "$image" "$question_bank_image" | gzip > "$bundle/ocs-server-image.tar.gz"
+(cd "$bundle"; sha256sum install.sh .env.example seccomp-chromium.json NOTICE PLAYWRIGHT-LICENSE DEPLOYMENT.md QUESTION-BANK.md compose.yaml ocs-server-image.tar.gz > SHA256SUMS)
 mkdir -p releases
 archive="releases/ocs-server-linux-${architecture}-${revision}.tar.gz"
 # The image is already compressed; avoid recompressing the large archive.

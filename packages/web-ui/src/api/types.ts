@@ -216,3 +216,131 @@ export interface CatalogVersion {
 	codeUrl: string;
 	publishedAt?: string;
 }
+
+/** Question bank service: mirrors the admin API proxied by /api/v1/question-bank. */
+export type QuestionBankProtocol = 'openai-chat' | 'openai-response';
+
+export interface QuestionBankModelConfig {
+	protocol: QuestionBankProtocol;
+	baseUrl: string;
+	modelId: string;
+	/** '***' while a key is stored; an empty string clears it. Never persisted locally. */
+	apiKey: string;
+}
+
+export interface QuestionBankSettings {
+	enabled: boolean;
+	aiEnabled: boolean;
+	autoCache: boolean;
+	sameQuestionCheck: boolean;
+	timeoutSeconds: number;
+	retryCount: number;
+	model: QuestionBankModelConfig;
+}
+
+export interface QuestionBankLimits {
+	maxConcurrent: number;
+	perTokenConcurrent: number;
+	perTokenPerMinute: number;
+	timeoutSeconds: number;
+}
+
+export interface QuestionBankStats {
+	questions: number;
+	tokens: number;
+}
+
+export interface QuestionBankStatus {
+	configured: boolean;
+	available: boolean;
+	enabled?: boolean;
+	aiEnabled?: boolean;
+	service?: string;
+	version?: string;
+	stats?: QuestionBankStats;
+	limits?: QuestionBankLimits;
+	capabilities?: string[];
+}
+
+export interface QuestionBankFolder {
+	id: number;
+	name: string;
+	parentId: number;
+	/** Direct children only; a folder subtree is not summed. */
+	questionCount: number;
+}
+
+export interface QuestionBankQuestion {
+	id: number;
+	question: string;
+	options?: string | null;
+	answer: string;
+	questionType?: string | null;
+	folderId: number;
+	isAi: boolean;
+	isPendingCorrection: boolean;
+	/** SQLite 'YYYY-MM-DD HH:mm:ss' in UTC. */
+	createdAt?: string | null;
+}
+
+export interface QuestionInput {
+	question: string;
+	options?: string | null;
+	answer: string;
+	questionType?: string | null;
+	folderId?: number;
+	isAi?: boolean;
+	isPendingCorrection?: boolean;
+}
+
+export interface QuestionBankQuestionPage {
+	items: QuestionBankQuestion[];
+	total: number;
+	page: number;
+	limit: number;
+}
+
+export interface QuestionBankClient {
+	id: string;
+	name: string;
+	prefix: string;
+	createdAt: string;
+	lastUsedAt?: string | null;
+}
+
+export interface QuestionBankConnection {
+	client: QuestionBankClient & { token: string };
+	queryUrl: string;
+	wrapper: unknown[];
+}
+
+export interface QuestionBankImportResult {
+	inserted: number;
+	skipped: number;
+}
+
+export interface QuestionBankLog {
+	id: string;
+	/** SQLite 'YYYY-MM-DD HH:mm:ss' in UTC. */
+	timestamp: string;
+	tokenId: string;
+	status: number;
+	durationMs: number;
+	/** 'local' | 'ai-or-cache' | 'error' */
+	source: string;
+	errorCode?: string | null;
+}
+
+export interface QuestionQueryPayload {
+	title: string;
+	options?: string;
+	type?: string;
+}
+
+export interface QuestionQueryData {
+	id: number;
+	question: string;
+	answer: string;
+	is_ai: boolean;
+	is_pending_correction: boolean;
+}

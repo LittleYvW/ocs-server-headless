@@ -16,6 +16,7 @@
 ![页面与截图](images/console-pages.png)
 ![自动化结果](images/console-automation.png)
 ![平台设置](images/console-settings.png)
+![题库服务](images/console-question-bank.png)
 
 ## 目录与职责
 
@@ -23,11 +24,15 @@
 src/api/client.ts       fetch 封装、Bearer、错误分类、Blob 与下载进度
 src/api/stream.ts       带 Bearer 的 fetch SSE、心跳看门狗、退避重连
 src/api/endpoints.ts    按资源分组的接口调用
+src/api/question-query.ts  不带管理令牌的独立题库查询
 src/stores/session.ts   令牌存储、启动校验、401 失效处理
 src/stores/service.ts   系统/实例/脚本/设置数据与实例操作
 src/stores/events.ts    事件缓存、SSE 生命周期、事件到状态的归并
+src/stores/question-bank.ts  题库状态轮询、设置草稿、分页与请求取消
+src/lib/question-bank.ts     UTF-8 字节校验、UTC 时间、错误码文案、导入分批
 src/components/         线框基础组件、实例表单、页面/下载/自动化面板、FlowField 背景
-src/views/              连接、概览、实例、详情、脚本、设置、事件
+src/components/question-bank/  题库设置、题目、文件夹、导入、客户端、查询验证、日志
+src/views/              连接、概览、实例、详情、脚本、设置、事件、题库服务
 src/styles/             设计令牌、基础布局、组件样式
 tests/console.e2e.cjs   真实浏览器端到端检查
 ```
@@ -53,6 +58,12 @@ tests/console.e2e.cjs   真实浏览器端到端检查
 - 页面默认通过带 Bearer 的 fetch 读取 MJPEG 实时画面；预览开启时暂停截图轮询，停止预览后可使用原截图界面。切换页面/实例、停止或离开视图时取消连接并释放帧 URL；画面不进入 SSE 日志。
 - “直接操作”通过独占控制会话和有序 HTTP 批次转发画面点击、右键、滚轮、文字、粘贴及常用按键；点击画面后可直接输入，中文在本地输入法完成组词后提交，也可用画面下方文字框发送。Ctrl+Alt+Esc、窗口失焦、隐藏或切页会结束控制，异常断网由 15 秒租约回收；失败批次不自动重放。
 - 导航工具提供前进/后退、刷新、新建/关闭标签页；选择器点击与填充收在“高级操作”。内置自动化中的页面显示状态并拒绝人工修改，保留查看能力。
+- 题库服务页进入时读取 `/api/v1/question-bank/status`，页面可见时每 10 秒刷新；读数失败保留上次快照并标记为状态未知，不显示为正常运行。离开页面会中止在途请求、清除计时器与内存中的查询令牌。
+- 题库设置按字段差异提交 `PATCH /settings`，模型子对象同样只提交改动字段；读取到的 Key 为 `***` 时未编辑不提交，点“清除”才提交空字符串，保存后以返回的脱敏设置重建草稿。API Key 与查询令牌不进入 URL、存储、事件或日志。
+- 题目列表的文件夹筛选、搜索与分页会取消旧请求并按请求代次丢弃过期响应；搜索防抖 280ms 并回到第一页，删除当前页最后一条后回退到有效页。
+- 查询验证使用独立的 `api/question-query.ts`，不携带管理令牌；查询 401 只表示查询令牌无效，不结束管理员会话。取消仅停止页面等待，已接纳任务仍受服务端预算约束。
+- 导入在浏览器解析 JSON 并按记录字段校验，按 500 条与编码后 1 MiB 分批；错误行阻止提交，某批失败后停止后续批次并提供从失败批重试，不宣称整份文件已回滚。
+- 生成的连接配置（含查询令牌）只保存在该次操作的内存中，离开页面即清除；客户端列表只显示名称与令牌前缀，不提供找回旧令牌。
 
 ## 开发
 
@@ -92,7 +103,9 @@ pnpm build:web
 pnpm test:web
 ```
 
-`pnpm test:web` 串行执行 `console.e2e.cjs`、`userscripts.e2e.cjs` 与 `management.e2e.cjs`。后两项覆盖脚本源/文件导入、版本更新/固定版本、源码下载、加密迁移、存储清理及实时预览。
+`pnpm test:web` 串行执行 `console.e2e.cjs`、`browser-control.e2e.cjs`、`userscripts.e2e.cjs`、`management.e2e.cjs` 与 `question-bank.e2e.cjs`。中间三项覆盖直接操作、脚本源/文件导入、版本更新/固定版本、源码下载、加密迁移、存储清理及实时预览。
+
+`tests/question-bank.e2e.cjs` 启动真实后端、真实 `/api/v1/question-bank` 网关与真实浏览器，题库上游优先使用已构建的 Rust 服务（`ZERROR_TEST_BINARY` 或 `services/zerror/target/debug/zerror-headless`），缺失时退回实现同一契约的本地 fixture，并在启动时打印所用模式。模型供应商始终是本地 fixture，不消耗真实额度。用例覆盖四种服务状态、设置保存与 `***` 脱敏、题目与文件夹、导入分批与错误行、令牌只显示一次、查询验证只携带查询令牌、暂停查询、日志元数据与撤销后 401。
 
 `tests/console.e2e.cjs` 启动临时后端与本地页面 fixture，用真实浏览器覆盖：无效令牌、会话 / 记住令牌存储、SSE 中断重连、用户脚本创建、条件字段、实例创建、启动/重启/停止、截图、填写/点击、导航、下载、自动化结果、事件展开、`settings.ocs` 整体替换、退出登录与来源 403。
 

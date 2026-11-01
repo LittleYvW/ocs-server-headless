@@ -2,4 +2,5 @@
 *.service text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+/services/zerror/** text eol=lf
 .husky/* text eol=lf

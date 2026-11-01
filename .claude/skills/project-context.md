@@ -96,6 +96,7 @@ setup.sh 用户级安装 Node 和 pnpm、不调用 sudo、不安装 Electron；s
 - server tests/runtime.test.cjs：fake worker 验证并发、启动失败、停止竞争、异常退出和清理。
 - smoke.ts：真实 Chromium、本地页面、填写 / 点击 / 截图、关闭重启及持久化。
 - web-ui tests/console.e2e.cjs：真实浏览器控制台回归，覆盖认证、SSE 重连、条件字段、实例生命周期、截图、操作、下载、自动化、事件与来源 403。
+- web-ui tests/question-bank.e2e.cjs：真实后端、真实题库网关与真实浏览器，题库上游优先用已构建的 Rust 服务（可用 `ZERROR_TEST_BINARY`），缺失时退回同一契约的本地 fixture；覆盖服务状态、设置脱敏、题目／文件夹、分批导入、令牌只显示一次、查询验证、暂停查询与撤销后 401。
 
 改动后运行对应测试，再运行必要类型检查与构建；有真实浏览器依赖的行为用 smoke 验证。不要把 mock 测试通过写成真实浏览器验证成功。
 
@@ -103,6 +104,14 @@ pre-push 执行 `pnpm lint && pnpm typecheck && pnpm typecheck:web`，与 CI 的
 commit-msg 与 pre-push 统一通过 scripts/git-hook.sh 执行；Windows Git / GitHub Desktop 自动转交默认 WSL（可用本地 Git 配置 ocs.hooksWslDistribution 指定），Linux/macOS 加载 setup.sh 生成的工具环境。不跳过 commitlint、格式或类型检查，不混用 Windows 与 WSL 的依赖。
 
 默认部署不依赖 GitHub 服务：deploy/install.sh 从源码构建，deploy/compose.yaml 声明构建上下文且默认构建应用镜像；用户可从任意 Git 托管或源码压缩包获取完整源码。Dockerfile 使用固定摘要的 Node Debian base、锁定 Playwright 的 Chromium 和共享库，Compose 使用 named volume、sandbox 与 Chromium seccomp。现有工作流只是可选检查和打包工具，缺失 .github/ 不影响构建启动。scripts/package-container.sh 可手动导出离线包；离线导入需显式运行 install.sh --load-image，说明见 docs/offline-deployment.md。新机器入口见 docs/deployment.md；原生 systemd 示例使用 KillMode=mixed，部署时仍需调整实际路径和服务账号。
+
+## 独立题库服务
+
+`services/zerror` 是从 Miaozeqiu/ZError 提取的独立 Rust HTTP 服务，不引入 Tauri。复用 SQLite 迁移、中文题目匹配、题型提示和答案规范化；模型协议由服务端执行。Compose 与安装器并列构建、启动主服务和题库，数据和内部凭据独立持久化；主服务只读内部凭据，公开固定查询代理和管理路由。
+
+`packages/server/src/question-bank.ts` 提供 `/question-bank/query`（独立查询令牌、OCS 协议）与 `/api/v1/question-bank/*`（现有管理认证）。不能把主服务管理令牌或供应商 Key 发送到 OCS 脚本。模型配置加密，查询令牌只存哈希且原文仅在创建时返回；不记录题目正文、请求头或供应商原始错误。题库原生构建使用 Cargo.lock，验证命令 `pnpm test:question-bank`。Node-only 工作流不依赖 Rust。
+
+完整接口与范围见 `docs/question-bank.md`。题库页面已实现于 `packages/web-ui`（`#/question-bank`，视觉沿用控制台设计系统）；`docs/question-bank-frontend-plan.md` 保留功能、交互、接口、错误和验收规范。不要把它描述为仅停留在计划阶段。
 
 ## 前端工作
 
