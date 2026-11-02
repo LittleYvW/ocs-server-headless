@@ -20,6 +20,7 @@
 	},
 	"dependencies": {
 		"@ocs-server/common": "workspace:*",
+		"acorn": "8.19.0",
 		"express": "^4.21.2",
 		"fflate": "0.8.2",
 		"playwright-core": "catalog:"

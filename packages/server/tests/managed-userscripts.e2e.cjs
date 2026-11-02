@@ -7,6 +7,7 @@ const http = require('node:http');
 const { chromium } = require('playwright-core');
 const { prepareScriptManager, installManagedScripts } = require('../dist/manager');
 const { installBrowserBridge } = require('../dist/browser-bridge');
+const { header: fontHeader, decoder: fontDecoder, sfnt } = require('./fixtures/font-cmap.cjs');
 
 test('real script manager preserves GM storage and reconciles enabled scripts', async (t) => {
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ocs-managed-script-'));
@@ -56,12 +57,13 @@ test('real script manager preserves GM storage and reconciles enabled scripts', 
 		createdAt: '',
 		updatedAt: ''
 	};
+	const events = [];
 	const install = async (scripts) =>
 		installManagedScripts(browser, {
 			scripts,
 			dataDir,
 			profileId: 'fixture',
-			onEvent: () => {},
+			onEvent: (name, data) => events.push({ name, ...data }),
 			backgroundUrl: await bridge.backgroundUrl()
 		});
 	const result = async (expected) => {
@@ -126,4 +128,50 @@ test('real script manager preserves GM storage and reconciles enabled scripts', 
 	await result(null);
 	await install([updated]);
 	await result('updated:5:loaded');
+	const fontScript = {
+		...script,
+		id: 'font-fixture',
+		name: 'OCS font fixture',
+		version: '5.2.6',
+		code:
+			fontHeader.replace('// @grant none', `// @grant none\n// @match ${base}/font\n// @run-at document-end`) +
+			fontDecoder.replace(
+				'if (config.useWorker) return { chars, strict: this === undefined };',
+				`if (config.useWorker) {
+					return new Promise((resolve, reject) => {
+						const url = URL.createObjectURL(new Blob(['onmessage=e=>postMessage(e.data)'], {type:'application/javascript'}));
+						const worker = new Worker(url);
+						URL.revokeObjectURL(url);
+						worker.onerror = error => { worker.terminate(); reject(error); };
+						worker.onmessage = event => { worker.terminate(); resolve({chars:event.data}); };
+						worker.postMessage(Array.from(chars));
+					});
+				}`
+			) +
+			`\n(async () => {
+				const font = new Uint8Array(${JSON.stringify([...sfnt()])}).buffer;
+				const results = [];
+				for (const useWorker of [false, true]) results.push((await decoder(font,'国A墿B题',{refTableUrl:'',useWorker})).chars);
+				document.body.dataset.fontResults = JSON.stringify(results);
+			})();`
+	};
+	const originalFontCode = fontScript.code;
+	await install([updated, fontScript]);
+	const fontPage = await browser.newPage();
+	await fontPage.goto(base + '/font');
+	await fontPage.waitForFunction(() => !!document.body.dataset.fontResults, undefined, { timeout: 15000 });
+	assert.deepEqual(await fontPage.evaluate(() => JSON.parse(document.body.dataset.fontResults)), [
+		['墿', 'B'],
+		['墿', 'B']
+	]);
+	assert.equal(fontScript.code, originalFontCode);
+	assert.ok(
+		events.some(
+			(event) =>
+				event.name === 'userscript-install-result' &&
+				event.scriptId === 'font-fixture' &&
+				event.compatibilityFixes?.includes('ocs-font-cmap-v1')
+		)
+	);
+	await fontPage.close();
 });

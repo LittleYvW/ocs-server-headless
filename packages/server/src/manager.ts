@@ -7,6 +7,7 @@ import type { BrowserContext, Page } from 'playwright-core';
 import type { UserScript } from './types';
 import { fetchRemoteBytes, parseUserScriptMetadata } from './userscript-source';
 import { validateExtensions } from './extensions';
+import { adaptOCSFontSource } from './ocs-font-fix';
 
 export const DEFAULT_MANAGER_URL =
 	'https://github.com/scriptscat/scriptcat/releases/download/v1.5.0/scriptcat-v1.5.0-chrome.zip';
@@ -88,19 +89,25 @@ const internalPages = new WeakSet<Page>();
 export const isManagerPage = (page: Page): boolean => internalPages.has(page);
 
 export function installationCode(script: Pick<UserScript, 'code'>, backgroundUrl?: string): string {
+	return prepareInstallation(script, backgroundUrl).code;
+}
+
+function prepareInstallation(script: Pick<UserScript, 'code'>, backgroundUrl?: string) {
 	const metadata = parseUserScriptMetadata(script.code);
 	if (!metadata) throw new Error('Invalid standard userscript');
+	const adapted = adaptOCSFontSource(script.code, metadata);
+	const installed = (code: string) => ({ code, fontFix: adapted.fontFix });
 	let header = metadata.raw
 		.replace(/^\s*\/\/\s*@(updateURL|downloadURL)\b[^\r\n]*(?:\r?\n)?/gim, '')
 		.replace(/\/\/\s*==\/UserScript==/, '// @updateURL none\n// @downloadURL none\n// ==/UserScript==');
 	const grants = metadata.values.grant || [];
 	if (!backgroundUrl || !grants.some((grant) => grant === 'GM_xmlhttpRequest' || grant === 'GM.xmlHttpRequest'))
-		return script.code.replace(metadata.raw, header);
+		return installed(adapted.code.replace(metadata.raw, header));
 	if (!(metadata.values.connect || []).some((host) => host === '*' || host === '127.0.0.1'))
 		header = header.replace(/\/\/\s*==\/UserScript==/, '// @connect 127.0.0.1\n// ==/UserScript==');
-	return (
+	return installed(
 		header +
-		`
+			`
 ;((legacy, modern) => {
 	const redirect = details => {
 		try {
@@ -120,15 +127,13 @@ export function installationCode(script: Pick<UserScript, 'code'>, backgroundUrl
 		gm = Object.create(Object.getPrototypeOf(modern), descriptors);
 	}
 	(function(GM_xmlhttpRequest, GM) {
-${script.code.replace(metadata.raw, '')}
+${adapted.code.replace(metadata.raw, '')}
 	}).call(this, request, gm);
 })(typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : undefined, typeof GM === 'object' ? GM : undefined);
 `
 	);
 }
 
-const scriptHash = (script: UserScript, backgroundUrl?: string) =>
-	createHash('sha256').update(installationCode(script, backgroundUrl)).digest('hex');
 const scriptIdentity = (script: UserScript) => {
 	const metadata = parseUserScriptMetadata(script.code)?.values;
 	return JSON.stringify([metadata?.namespace?.[0] || '', metadata?.name?.[0] || script.name]);
@@ -372,17 +377,26 @@ export async function installManagedScripts(
 ): Promise<void> {
 	const secret = randomUUID();
 	const records = readRecords(options.dataDir, options.profileId);
-	const sources = new Map(options.scripts.map((script) => ['/' + secret + '/' + script.id + '.user.js', script]));
+	const sources = new Map(
+		options.scripts.map((script) => {
+			const prepared = prepareInstallation(script, options.backgroundUrl);
+			return [
+				'/' + secret + '/' + script.id + '.user.js',
+				{ script, ...prepared, hash: createHash('sha256').update(prepared.code).digest('hex') }
+			];
+		})
+	);
+	const desiredHashes = new Map([...sources.values()].map((source) => [source.script.id, source.hash]));
 	const server = http.createServer((req, res) => {
-		const script = req.method === 'GET' ? sources.get(req.url || '') : undefined;
+		const source = req.method === 'GET' ? sources.get(req.url || '') : undefined;
 		res.setHeader('Cache-Control', 'no-store');
 		res.setHeader('X-Content-Type-Options', 'nosniff');
-		if (!script) {
+		if (!source) {
 			res.writeHead(404).end();
 			return;
 		}
 		res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-		res.end(installationCode(script, options.backgroundUrl));
+		res.end(source.code);
 	});
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -394,9 +408,7 @@ export async function installManagedScripts(
 		const port = (server.address() as import('node:net').AddressInfo).port;
 		try {
 			for (const record of records.filter((item) => item.managerId === manager.managerId)) {
-				const desired = options.scripts.some(
-					(script) => script.id === record.scriptId && scriptHash(script, options.backgroundUrl) === record.hash
-				);
+				const desired = desiredHashes.get(record.scriptId) === record.hash;
 				if (!desired && (await nativeRow(manager.page, record.nativeId).count())) {
 					await setNativeEnabled(manager.page, record.nativeId, false);
 					await waitForRegistration(browser, manager.managerId, record.nativeId, false);
@@ -405,10 +417,12 @@ export async function installManagedScripts(
 					options.onEvent('userscript-disabled', { scriptId: record.scriptId });
 				}
 			}
-			for (const [pathname, script] of sources) {
+			for (const [pathname, source] of sources) {
+				const { script, hash, fontFix } = source;
 				options.onEvent('userscript-install-started', { scriptId: script.id });
+				if (fontFix === 'unrecognized')
+					options.onEvent('userscript-warning', { scriptId: script.id, code: 'OCS_FONT_FIX_UNRECOGNIZED' });
 				try {
-					const hash = scriptHash(script, options.backgroundUrl);
 					let record = records.find(
 						(item) => item.managerId === manager.managerId && item.scriptId === script.id && item.hash === hash
 					);
@@ -449,7 +463,8 @@ export async function installManagedScripts(
 					options.onEvent('userscript-install-result', {
 						scriptId: script.id,
 						status: 'completed',
-						version: script.version
+						version: script.version,
+						...(fontFix === 'applied' ? { compatibilityFixes: ['ocs-font-cmap-v1'] } : {})
 					});
 				} catch (error) {
 					options.onEvent('userscript-install-result', {
