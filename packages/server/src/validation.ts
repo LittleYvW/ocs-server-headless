@@ -1,6 +1,6 @@
 import { AutomationScripts } from '@ocs-server/common/automation';
 import { validateConfigValue } from '@ocs-server/common';
-import { BrowserProfile, UserScript } from './types';
+import { BrowserOptions, BrowserProfile, UserScript } from './types';
 import { Script } from 'node:vm';
 import { MAX_USER_SCRIPT_BYTES, parseUserScriptMetadata, remoteUrl } from './userscript-source';
 import { ApiError } from './api-error';
@@ -36,12 +36,59 @@ export function url(value: unknown): string {
 }
 export const id = (value: string): string => (/^[a-f0-9-]{36}$/.test(value) ? value : missing());
 
+function browserOptionsInput(value: unknown): BrowserOptions {
+	const body = object(value);
+	fields(body, ['locale', 'timezoneId', 'userAgent', 'viewport']);
+	const result: BrowserOptions = {};
+	if (body.locale !== undefined) {
+		const locale = text(body.locale, 'browser locale', 100).trim();
+		try {
+			result.locale = Intl.getCanonicalLocales(locale)[0];
+		} catch {
+			return bad('Invalid browser locale; expected a language tag such as zh-CN or en-US');
+		}
+	}
+	if (body.timezoneId !== undefined) {
+		const timezoneId = text(body.timezoneId, 'browser timezoneId', 100).trim();
+		if (!/^[A-Za-z][A-Za-z0-9_+\-/]*$/.test(timezoneId)) return bad('Invalid browser timezoneId');
+		try {
+			new Intl.DateTimeFormat('en', { timeZone: timezoneId }).format();
+		} catch {
+			return bad('Invalid browser timezoneId; expected a time zone such as Asia/Shanghai or UTC');
+		}
+		result.timezoneId = timezoneId;
+	}
+	if (body.userAgent !== undefined) {
+		const userAgent = text(body.userAgent, 'browser userAgent', 1024).trim();
+		if (/[\x00-\x1f\x7f]/.test(userAgent)) return bad('Invalid browser userAgent');
+		result.userAgent = userAgent;
+	}
+	if (body.viewport !== undefined) {
+		const viewport = object(body.viewport);
+		fields(viewport, ['width', 'height']);
+		if (
+			!Number.isInteger(viewport.width) ||
+			viewport.width < 320 ||
+			viewport.width > 3840 ||
+			!Number.isInteger(viewport.height) ||
+			viewport.height < 240 ||
+			viewport.height > 2160
+		)
+			return bad('Invalid browser viewport; width must be 320–3840 and height 240–2160');
+		result.viewport = { width: viewport.width, height: viewport.height };
+	}
+	return result;
+}
+
 export function browserInput(
 	value: unknown,
 	previous?: BrowserProfile
-): Pick<BrowserProfile, 'name' | 'startUrl' | 'automationScripts' | 'userScriptIds' | 'group' | 'tags' | 'notes'> {
+): Pick<
+	BrowserProfile,
+	'name' | 'startUrl' | 'browserOptions' | 'automationScripts' | 'userScriptIds' | 'group' | 'tags' | 'notes'
+> {
 	const body = object(value);
-	fields(body, ['name', 'startUrl', 'automationScripts', 'userScriptIds', 'group', 'tags', 'notes']);
+	fields(body, ['name', 'startUrl', 'browserOptions', 'automationScripts', 'userScriptIds', 'group', 'tags', 'notes']);
 	const optionalText = (key: 'group' | 'notes', limit: number) => {
 		if (body[key] === undefined) return previous?.[key];
 		if (typeof body[key] !== 'string' || body[key].length > limit) return bad(`Invalid ${key}`);
@@ -61,6 +108,8 @@ export function browserInput(
 		notes: optionalText('notes', 10000),
 		tags: tags as string[] | undefined,
 		startUrl: body.startUrl === undefined ? previous?.startUrl || 'https://example.com/' : url(body.startUrl),
+		browserOptions:
+			body.browserOptions === undefined ? previous?.browserOptions : browserOptionsInput(body.browserOptions),
 		automationScripts: body.automationScripts ?? previous?.automationScripts ?? [],
 		userScriptIds: body.userScriptIds ?? previous?.userScriptIds ?? []
 	};

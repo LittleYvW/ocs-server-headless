@@ -72,6 +72,12 @@ Content-Type: application/json
 {
   "name": "实例一",
   "startUrl": "https://example.com",
+  "browserOptions": {
+    "locale": "zh-CN",
+    "timezoneId": "Asia/Shanghai",
+    "userAgent": "Mozilla/5.0 ExampleBrowser/1.0",
+    "viewport": {"width": 1280, "height": 720}
+  },
   "automationScripts": [
     {"name": "通用-新建页面", "configs": {"url": "https://example.com"}}
   ],
@@ -80,6 +86,17 @@ Content-Type: application/json
 ```
 
 可选 `group`（最多 500 字符）、`tags`（最多 30 个、每个 100 字符）和 `notes`（最多 10000 字符）作为管理元数据；分组仅为逻辑路径，不是服务端目录。
+
+可选 `browserOptions` 为每个实例独立保存的浏览器参数，在启动或重启时应用，也包含在加密配置导入导出中：
+
+| 字段 | 用途与校验 | 未提供时 |
+| --- | --- | --- |
+| `locale` | BCP 47 语言标识，如 `zh-CN`、`zh-TW`、`en-US`，最多 100 字符；规范化大小写，影响 `navigator.language`、`Accept-Language` 和日期数字格式 | Chromium / Playwright 默认语言 |
+| `timezoneId` | 有效时区名，如 `Asia/Shanghai`、`Asia/Taipei`、`America/New_York`、`UTC`，最多 100 字符 | 服务器时区 |
+| `userAgent` | 自定义 User-Agent，最多 1024 字符，不能含控制字符 | 当前 Chromium 默认值 |
+| `viewport` | 同时提供整数 `width`（320–3840）和 `height`（240–2160），单位为 CSS 像素 | `1365 × 900` |
+
+PATCH 完全省略 `browserOptions` 时保留已有参数；提供该对象时整体替换，未提供的子字段恢复默认。发送 `{"browserOptions":{}}` 恢复全部默认值。API 不接受空字符串或 `null` 作为参数值，恢复默认时应省略对应子字段。旧实例无需迁移，保留原有默认行为。
 
 `id` 和时间字段由服务端生成，不能指定 profile 目录、进程路径、任意 Chromium 参数或关闭无头模式。`startUrl` 使用不含用户名或密码的 HTTP / HTTPS 地址，默认 `https://example.com/`。自动化程序名称与配置应从 `/automation-scripts` 返回结果获取，不硬编码所有登录配置。
 

@@ -36,6 +36,130 @@ async function firstFrame(reader) {
 }
 
 test(
+	'real HTTP: per-instance browser parameters reach Chromium and reset on the same profile',
+	{ timeout: 90000 },
+	async (t) => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ocs-browser-options-'));
+		const token = 'browser-options-fixture-token-1234567890';
+		const reports = [];
+		let service;
+		const fixture = http.createServer((req, res) => {
+			if (req.url === '/report') {
+				let body = '';
+				req.on('data', (part) => {
+					body += part;
+				});
+				req.on('end', () => {
+					reports.push({ ...JSON.parse(body), headers: req.headers });
+					res.end('ok');
+				});
+				return;
+			}
+			res.setHeader('Content-Type', 'text/html');
+			res.end(`<!doctype html><script>
+			fetch('/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+				path: location.pathname, language: navigator.language, languages: navigator.languages,
+				locale: Intl.DateTimeFormat().resolvedOptions().locale,
+				timezoneId: Intl.DateTimeFormat().resolvedOptions().timeZone,
+				userAgent: navigator.userAgent, viewport: { width: innerWidth, height: innerHeight }
+			}) });
+		</script>`);
+		});
+		t.after(async () => {
+			await service?.close();
+			await new Promise((resolve) => {
+				fixture.close(resolve);
+				fixture.closeAllConnections();
+			});
+			fs.rmSync(directory, { recursive: true, force: true });
+		});
+		await new Promise((resolve) => fixture.listen(0, '127.0.0.1', resolve));
+		service = await startServer(loadConfig({ OCS_DATA_DIR: directory, OCS_AUTH_TOKEN: token, OCS_PORT: '0' }));
+		const base = `http://127.0.0.1:${service.server.address().port}/api/v1`;
+		const fixtureBase = `http://127.0.0.1:${fixture.address().port}`;
+		const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+		const api = async (route, method = 'GET', body) => {
+			const response = await fetch(base + route, {
+				method,
+				headers,
+				body: body === undefined ? undefined : JSON.stringify(body)
+			});
+			assert.equal(response.ok, true, `${method} ${route}: ${response.status} ${await response.clone().text()}`);
+			return (await response.json()).data;
+		};
+		const defaults = await api('/browsers', 'POST', {
+			name: 'Default parameters',
+			startUrl: fixtureBase + '/defaults'
+		});
+		await api(`/browsers/${defaults.id}/start`, 'POST');
+		await until(() => reports.some((report) => report.path === '/defaults'));
+		const baseline = reports.find((report) => report.path === '/defaults');
+		assert.deepEqual(baseline.viewport, { width: 1365, height: 900 });
+		const options = {
+			locale: 'fr-FR',
+			timezoneId: 'Europe/Paris',
+			userAgent: 'OCS options fixture/1.0',
+			viewport: { width: 1280, height: 720 }
+		};
+		const profile = await api('/browsers', 'POST', {
+			name: 'Custom parameters',
+			startUrl: fixtureBase + '/custom',
+			browserOptions: options
+		});
+		const route = `/browsers/${profile.id}`;
+		const assertOptions = (report, expected) => {
+			assert.equal(report.language, expected.locale);
+			assert.equal(report.languages[0], expected.locale);
+			assert.equal(report.locale, expected.locale);
+			assert.equal(report.timezoneId, expected.timezoneId);
+			assert.equal(report.userAgent, expected.userAgent);
+			assert.equal(report.headers['user-agent'], expected.userAgent);
+			assert.equal(report.headers['accept-language'].split(',')[0], expected.locale);
+			assert.deepEqual(report.viewport, expected.viewport);
+		};
+		const startAndReport = async (action = 'start') => {
+			const count = reports.length;
+			await api(`${route}/${action}`, 'POST');
+			await until(() => reports.slice(count).some((report) => report.path === '/custom'));
+			return reports.slice(count).find((report) => report.path === '/custom');
+		};
+		assertOptions(await startAndReport(), options);
+		const busy = await fetch(base + route, { method: 'PATCH', headers, body: JSON.stringify({ browserOptions: {} }) });
+		assert.equal(busy.status, 409);
+		assert.equal((await busy.json()).error.code, 'BROWSER_BUSY');
+		await api(`${route}/new-page`, 'POST', { url: fixtureBase + '/new-page' });
+		await until(() => reports.some((report) => report.path === '/new-page'));
+		assertOptions(
+			reports.find((report) => report.path === '/new-page'),
+			options
+		);
+		const defaultPage = (await api(`/browsers/${defaults.id}/pages`))[0];
+		const count = reports.length;
+		await api(`/browsers/${defaults.id}/reload`, 'POST', { pageId: defaultPage.id });
+		await until(() => reports.slice(count).some((report) => report.path === '/defaults'));
+		assert.equal(reports.slice(count).find((report) => report.path === '/defaults').language, baseline.language);
+		await api(`/browsers/${defaults.id}/stop`, 'POST');
+		assertOptions(await startAndReport('restart'), options);
+		await api(`${route}/stop`, 'POST');
+		const changed = {
+			locale: 'zh-CN',
+			timezoneId: 'Asia/Shanghai',
+			userAgent: 'OCS changed fixture/2.0',
+			viewport: { width: 1024, height: 768 }
+		};
+		await api(route, 'PATCH', { browserOptions: changed });
+		assertOptions(await startAndReport(), changed);
+		await api(`${route}/stop`, 'POST');
+		await api(route, 'PATCH', { browserOptions: {} });
+		const reset = await startAndReport();
+		assert.equal(reset.language, baseline.language);
+		assert.equal(reset.timezoneId, baseline.timezoneId);
+		assert.equal(reset.userAgent, baseline.userAgent);
+		assert.deepEqual(reset.viewport, baseline.viewport);
+	}
+);
+
+test(
 	'real HTTP: private JPEG preview reconnects, closes on stop and receives OCS configuration updates',
 	{ timeout: 90000 },
 	async (t) => {

@@ -1,3 +1,10 @@
+export interface BrowserOptions {
+	locale?: string;
+	timezoneId?: string;
+	userAgent?: string;
+	viewport?: { width: number; height: number };
+}
+
 export interface BrowserProfile {
 	id: string;
 	name: string;
@@ -5,6 +12,8 @@ export interface BrowserProfile {
 	tags?: string[];
 	notes?: string;
 	startUrl: string;
+	/** Missing on older profiles: use the browser defaults and a 1365 × 900 viewport. */
+	browserOptions?: BrowserOptions;
 	automationScripts: { name: string; configs: Record<string, unknown> }[];
 	userScriptIds: string[];
 	createdAt: string;

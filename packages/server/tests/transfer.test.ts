@@ -69,7 +69,18 @@ function desktopCipher(plaintext: string, password: string) {
 describe('portable data transfer', () => {
 	it('roundtrips complete credentials through a password-protected, machine-independent export', async () => {
 		const data = database();
-		Object.assign(data.browsers[0], { group: '课程 / 第一组', tags: ['fixture'], notes: 'Portable notes' });
+		const browserOptions = {
+			locale: 'zh-CN',
+			timezoneId: 'Asia/Shanghai',
+			userAgent: 'OCS portable fixture/1.0',
+			viewport: { width: 1280, height: 720 }
+		};
+		Object.assign(data.browsers[0], {
+			group: '课程 / 第一组',
+			tags: ['fixture'],
+			notes: 'Portable notes',
+			browserOptions
+		});
 		const encrypted = await encryptTransfer(JSON.stringify(data), 'portable-passphrase');
 		expect(encrypted).not.toContain('private-login-password');
 		const imported = await decodeTransfer(
@@ -80,7 +91,8 @@ describe('portable data transfer', () => {
 		expect(imported.database.browsers[0]).toMatchObject({
 			group: '课程 / 第一组',
 			tags: ['fixture'],
-			notes: 'Portable notes'
+			notes: 'Portable notes',
+			browserOptions
 		});
 		expect(imported.database.browsers[0].userScriptIds).toEqual([imported.database.userScripts[0].id]);
 		expect(imported.warnings).toEqual([]);

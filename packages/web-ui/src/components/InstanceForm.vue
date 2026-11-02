@@ -6,7 +6,7 @@ import BaseButton from '@/components/BaseButton.vue';
 import BaseSwitch from '@/components/BaseSwitch.vue';
 import ModalPanel from '@/components/ModalPanel.vue';
 import { describeError } from '@/api/errors';
-import type { AutomationDefinition, BrowserView, ConfigDefinition, UserScript } from '@/api/types';
+import type { AutomationDefinition, BrowserOptions, BrowserView, ConfigDefinition, UserScript } from '@/api/types';
 import { isVisible, normalizeUrl, validateConfig } from '@/lib/config';
 import { saveBrowser } from '@/stores/service';
 import { toast } from '@/stores/toasts';
@@ -31,6 +31,11 @@ const group = ref('');
 const tagsText = ref('');
 const notes = ref('');
 const startUrl = ref('');
+const locale = ref('');
+const timezoneId = ref('');
+const userAgent = ref('');
+const viewportWidth = ref<string | number>('');
+const viewportHeight = ref<string | number>('');
 const entries = ref<DraftEntry[]>([]);
 const scriptIds = ref<string[]>([]);
 const addName = ref('');
@@ -47,12 +52,32 @@ function definitionOf(entryName: string): AutomationDefinition | undefined {
 	return props.definitions.find((item) => item.name === entryName);
 }
 
+function resetBrowserOptions(options: BrowserOptions = {}): void {
+	locale.value = options.locale || '';
+	timezoneId.value = options.timezoneId || '';
+	userAgent.value = options.userAgent || '';
+	viewportWidth.value = options.viewport?.width ?? '';
+	viewportHeight.value = options.viewport?.height ?? '';
+	for (const key of ['locale', 'timezoneId', 'userAgent', 'viewportWidth', 'viewportHeight']) delete errors[key];
+}
+
+function browserOptions(): BrowserOptions {
+	const options: BrowserOptions = {};
+	if (locale.value.trim()) options.locale = locale.value.trim();
+	if (timezoneId.value.trim()) options.timezoneId = timezoneId.value.trim();
+	if (userAgent.value.trim()) options.userAgent = userAgent.value.trim();
+	if (viewportWidth.value !== '' && viewportHeight.value !== '')
+		options.viewport = { width: Number(viewportWidth.value), height: Number(viewportHeight.value) };
+	return options;
+}
+
 function reset(): void {
 	name.value = props.profile?.name || '';
 	group.value = props.profile?.group || '';
 	tagsText.value = (props.profile?.tags || []).join(', ');
 	notes.value = props.profile?.notes || '';
 	startUrl.value = props.profile?.startUrl || 'https://example.com/';
+	resetBrowserOptions(props.profile?.browserOptions);
 	scriptIds.value = [...(props.profile?.userScriptIds || [])];
 	entries.value = (props.profile?.automationScripts || [])
 		.map((entry) => {
@@ -70,12 +95,9 @@ function reset(): void {
 	Object.keys(errors).forEach((key) => delete errors[key]);
 }
 
-watch(
-	() => [props.open, props.profile?.id],
-	() => {
-		if (props.open) reset();
-	}
-);
+watch([() => props.open, () => props.profile?.id], () => {
+	if (props.open) reset();
+});
 
 function entryFields(entry: DraftEntry): [string, ConfigDefinition][] {
 	return Object.entries(entry.definition.configs).filter(
@@ -156,6 +178,32 @@ function validate(): boolean {
 			errors.startUrl = '地址格式不正确。';
 		}
 	}
+	const options = browserOptions();
+	if (options.locale) {
+		try {
+			Intl.getCanonicalLocales(options.locale);
+		} catch {
+			errors.locale = '请输入有效的语言标识，例如 zh-CN、zh-TW 或 en-US。';
+		}
+	}
+	if (options.timezoneId) {
+		try {
+			if (!/^[A-Za-z][A-Za-z0-9_+\-/]*$/.test(options.timezoneId)) throw new Error('Invalid time zone');
+			new Intl.DateTimeFormat('en', { timeZone: options.timezoneId }).format();
+		} catch {
+			errors.timezoneId = '请输入有效的时区，例如 Asia/Shanghai、Asia/Taipei 或 UTC。';
+		}
+	}
+	if (options.userAgent && (options.userAgent.length > 1024 || /[\x00-\x1f\x7f]/.test(options.userAgent)))
+		errors.userAgent = 'User-Agent 不能包含控制字符，且不能超过 1024 个字符。';
+	if (viewportWidth.value !== '' || viewportHeight.value !== '') {
+		const width = Number(viewportWidth.value);
+		const height = Number(viewportHeight.value);
+		if (!Number.isInteger(width) || width < 320 || width > 3840)
+			errors.viewportWidth = '请输入 320–3840 之间的整数，并同时填写宽高。';
+		if (!Number.isInteger(height) || height < 240 || height > 2160)
+			errors.viewportHeight = '请输入 240–2160 之间的整数，并同时填写宽高。';
+	}
 	entries.value.forEach((entry, index) => {
 		for (const [key, config] of Object.entries(entry.definition.configs)) {
 			if (config.hide || !isVisible(config, entry.configs)) continue;
@@ -183,6 +231,7 @@ async function submit(): Promise<void> {
 				.filter(Boolean),
 			notes: notes.value,
 			startUrl: normalizeUrl(startUrl.value),
+			browserOptions: browserOptions(),
 			automationScripts: entries.value.map((entry) => ({ name: entry.name, configs: entry.configs })),
 			userScriptIds: [...scriptIds.value]
 		});
@@ -285,6 +334,149 @@ async function submit(): Promise<void> {
 						rows="2"
 					></textarea></span
 			></label>
+			<div class="divider"></div>
+
+			<section class="form-section browser-options">
+				<header class="form-section__head">
+					<div>
+						<span class="panel__title">浏览器参数</span>
+						<p class="field__hint">停止实例后可修改，下次启动时生效；留空使用默认值。</p>
+					</div>
+					<BaseButton
+						size="sm"
+						@click="resetBrowserOptions()"
+						>恢复默认</BaseButton
+					>
+				</header>
+				<div class="form-grid">
+					<label
+						class="field"
+						:class="{ 'is-invalid': errors.locale }"
+					>
+						<span class="field__label">语言标识</span>
+						<span class="field__control">
+							<input
+								v-model="locale"
+								@input="delete errors.locale"
+								aria-label="语言标识"
+								maxlength="100"
+								placeholder="例如：zh-CN"
+								spellcheck="false"
+								autocomplete="off"
+							/>
+						</span>
+						<span
+							v-if="errors.locale"
+							class="field__error"
+							>{{ errors.locale }}</span
+						>
+						<span
+							v-else
+							class="field__hint"
+							>如 zh-CN、zh-TW、en-US；影响网页语言、请求语言和日期数字格式。</span
+						>
+					</label>
+					<label
+						class="field"
+						:class="{ 'is-invalid': errors.timezoneId }"
+					>
+						<span class="field__label">时区</span>
+						<span class="field__control">
+							<input
+								v-model="timezoneId"
+								@input="delete errors.timezoneId"
+								aria-label="时区"
+								maxlength="100"
+								placeholder="留空使用服务器时区"
+								spellcheck="false"
+								autocomplete="off"
+							/>
+						</span>
+						<span
+							v-if="errors.timezoneId"
+							class="field__error"
+							>{{ errors.timezoneId }}</span
+						>
+						<span
+							v-else
+							class="field__hint"
+							>如 Asia/Shanghai、Asia/Taipei、America/New_York 或 UTC。</span
+						>
+					</label>
+				</div>
+				<label
+					class="field"
+					:class="{ 'is-invalid': errors.userAgent }"
+				>
+					<span class="field__label">User-Agent</span>
+					<span class="field__control">
+						<input
+							v-model="userAgent"
+							@input="delete errors.userAgent"
+							aria-label="User-Agent"
+							maxlength="1024"
+							placeholder="留空使用 Chromium 默认值"
+							spellcheck="false"
+							autocomplete="off"
+						/>
+					</span>
+					<span
+						v-if="errors.userAgent"
+						class="field__error"
+						>{{ errors.userAgent }}</span
+					>
+				</label>
+				<div class="form-grid">
+					<label
+						class="field"
+						:class="{ 'is-invalid': errors.viewportWidth }"
+					>
+						<span class="field__label">视口宽度</span>
+						<span class="field__control">
+							<input
+								v-model="viewportWidth"
+								@input="delete errors.viewportWidth"
+								aria-label="视口宽度"
+								type="number"
+								min="320"
+								max="3840"
+								step="1"
+								placeholder="1365"
+							/>
+						</span>
+						<span
+							v-if="errors.viewportWidth"
+							class="field__error"
+							>{{ errors.viewportWidth }}</span
+						>
+					</label>
+					<label
+						class="field"
+						:class="{ 'is-invalid': errors.viewportHeight }"
+					>
+						<span class="field__label">视口高度</span>
+						<span class="field__control">
+							<input
+								v-model="viewportHeight"
+								@input="delete errors.viewportHeight"
+								aria-label="视口高度"
+								type="number"
+								min="240"
+								max="2160"
+								step="1"
+								placeholder="900"
+							/>
+						</span>
+						<span
+							v-if="errors.viewportHeight"
+							class="field__error"
+							>{{ errors.viewportHeight }}</span
+						>
+					</label>
+				</div>
+				<p class="field__hint">宽高需同时填写，单位为 CSS 像素；均留空时使用 1365 × 900。</p>
+			</section>
+
 			<div class="divider"></div>
 
 			<section class="form-section">

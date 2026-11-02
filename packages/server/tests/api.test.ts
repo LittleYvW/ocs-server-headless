@@ -29,6 +29,78 @@ afterEach(async () => {
 });
 
 describe('management API', () => {
+	it('saves browser parameters, preserves them on unrelated edits and reloads them from storage', async () => {
+		const browserOptions = {
+			locale: 'zh-CN',
+			timezoneId: 'Asia/Shanghai',
+			userAgent: 'OCS browser parameters fixture/1.0',
+			viewport: { width: 1280, height: 720 }
+		};
+		const response = await request('/api/v1/browsers', 'POST', {
+			name: 'configured',
+			browserOptions: { ...browserOptions, locale: ' zh-cn ' }
+		});
+		expect(response.status).toBe(201);
+		const profile = ((await response.json()) as any).data;
+		expect(profile.browserOptions).toEqual(browserOptions);
+		const edited = await request(`/api/v1/browsers/${profile.id}`, 'PATCH', { name: 'renamed' });
+		expect(edited.status).toBe(200);
+		expect(((await edited.json()) as any).data.browserOptions).toEqual(browserOptions);
+		const listed = ((await (await request('/api/v1/browsers')).json()) as any).data;
+		expect(listed[0].browserOptions).toEqual(browserOptions);
+		await service.close();
+		const restored = new Store(dir, path.join(dir, 'encryption.key'));
+		try {
+			expect(restored.read().browsers[0].browserOptions).toEqual(browserOptions);
+		} finally {
+			restored.close();
+		}
+	});
+	it('keeps legacy defaults and replaces or resets the complete browserOptions object', async () => {
+		const profile = ((await (await request('/api/v1/browsers', 'POST', { name: 'legacy' })).json()) as any).data;
+		expect(profile.browserOptions).toBeUndefined();
+		const route = `/api/v1/browsers/${profile.id}`;
+		await request(route, 'PATCH', {
+			browserOptions: { locale: 'zh-TW', timezoneId: 'Asia/Taipei', viewport: { width: 1920, height: 1080 } }
+		});
+		const changed = await request(route, 'PATCH', { browserOptions: { locale: 'en-GB' } });
+		expect(changed.status).toBe(200);
+		expect(((await changed.json()) as any).data.browserOptions).toEqual({ locale: 'en-GB' });
+		const reset = await request(route, 'PATCH', { browserOptions: {} });
+		expect(reset.status).toBe(200);
+		expect(((await reset.json()) as any).data.browserOptions).toEqual({});
+	});
+	it('rejects malformed browser parameters before saving a profile', async () => {
+		for (const browserOptions of [
+			null,
+			[],
+			{ args: ['--no-sandbox'] },
+			{ locale: 'zh_CN' },
+			{ locale: '' },
+			{ locale: ['zh-CN'] },
+			{ locale: 'a'.repeat(101) },
+			{ timezoneId: 'Not/A_Timezone' },
+			{ timezoneId: '+08:00' },
+			{ timezoneId: 8 },
+			{ userAgent: 'Agent\r\nInjected: header' },
+			{ userAgent: 'a'.repeat(1025) },
+			{ userAgent: '' },
+			{ viewport: null },
+			{ viewport: { width: 1280 } },
+			{ viewport: { width: '1280', height: 720 } },
+			{ viewport: { width: 1280.5, height: 720 } },
+			{ viewport: { width: 319, height: 720 } },
+			{ viewport: { width: 3841, height: 720 } },
+			{ viewport: { width: 1280, height: 239 } },
+			{ viewport: { width: 1280, height: 2161 } },
+			{ viewport: { width: 1280, height: 720, isMobile: true } }
+		]) {
+			const response = await request('/api/v1/browsers', 'POST', { name: 'invalid', browserOptions });
+			expect(response.status, JSON.stringify(browserOptions)).toBe(400);
+			expect(((await response.json()) as any).error.code).toBe('INVALID_REQUEST');
+		}
+		expect(service.store.read().browsers).toEqual([]);
+	});
 	it('exposes OCR requirements without blocking profile creation', async () => {
 		const response = await request('/api/v1/automation-scripts');
 		expect(response.status).toBe(200);

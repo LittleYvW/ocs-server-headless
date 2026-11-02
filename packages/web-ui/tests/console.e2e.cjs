@@ -236,6 +236,16 @@ async function main() {
 		await page.locator('.modal').waitFor();
 		await page.fill('input[placeholder="例如：教务系统 A"]', '本地 Fixture');
 		await page.fill('input[placeholder="https://example.com"]', fixtureBase + '/');
+		await page.getByLabel('语言标识', { exact: true }).fill('zh_CN');
+		await page.getByLabel('时区', { exact: true }).fill('Not/A_Timezone');
+		await page.getByLabel('视口宽度', { exact: true }).fill('1280');
+		await page.click('.modal__foot button:has-text("创建实例")');
+		assert.equal(await page.locator('.browser-options .field__error').count(), 3);
+		await page.getByLabel('语言标识', { exact: true }).fill('zh-CN');
+		await page.getByLabel('时区', { exact: true }).fill('Asia/Taipei');
+		await page.getByLabel('User-Agent', { exact: true }).fill('OCS console fixture/1.0');
+		await page.getByLabel('视口高度', { exact: true }).fill('720');
+		await saveShot('console-browser-options.png');
 		await page.selectOption('.auto-add select', { label: '超星-自动登录' });
 		await page.click('button:has-text("添加")');
 		const cxBlock = page.locator('.auto-block').filter({ hasText: '超星-自动登录' });
@@ -256,6 +266,22 @@ async function main() {
 		await page.click('.modal__foot button:has-text("创建实例")');
 		await page.locator('.tabs').waitFor({ timeout: 15000 });
 		report('instance created from generated fields');
+		const configuredProfile = service.store.read().browsers.find((profile) => profile.name === '本地 Fixture');
+		assert.deepEqual(configuredProfile.browserOptions, {
+			locale: 'zh-CN',
+			timezoneId: 'Asia/Taipei',
+			userAgent: 'OCS console fixture/1.0',
+			viewport: { width: 1280, height: 720 }
+		});
+		await page.locator('.page-head__actions').getByRole('button', { name: '编辑', exact: true }).click();
+		assert.equal(await page.getByLabel('语言标识', { exact: true }).inputValue(), 'zh-CN');
+		assert.equal(await page.getByLabel('时区', { exact: true }).inputValue(), 'Asia/Taipei');
+		assert.equal(await page.getByLabel('User-Agent', { exact: true }).inputValue(), 'OCS console fixture/1.0');
+		assert.equal(await page.getByLabel('视口宽度', { exact: true }).inputValue(), '1280');
+		assert.equal(await page.getByLabel('视口高度', { exact: true }).inputValue(), '720');
+		await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+		await page.getByRole('dialog').waitFor({ state: 'hidden' });
+		report('browser parameters validated, saved and restored in the editor');
 
 		// Real headless browser lifecycle, pages, screenshot and actions.
 		await page.click('.page-head__actions button:has-text("启动")');
@@ -337,6 +363,29 @@ async function main() {
 		await page.locator('.status--stopped').waitFor({ timeout: 30000 });
 		await page.locator('.offline-shot').waitFor();
 		report('stop cleared run-scoped pages');
+		await page.locator('.page-head__actions').getByRole('button', { name: '编辑', exact: true }).click();
+		await page.getByRole('dialog').getByRole('button', { name: '恢复默认', exact: true }).click();
+		// A background refresh replaces the profile object without changing its ID.
+		// The open editor must keep its draft until it is saved or cancelled.
+		service.store.update((database) => {
+			database.browsers.find((profile) => profile.id === configuredProfile.id).name = '后台刷新 Fixture';
+		});
+		service.events.publish('browser.updated', { profileId: configuredProfile.id });
+		await waitText('.page-head .display', '后台刷新 Fixture');
+		for (const label of ['语言标识', '时区', 'User-Agent', '视口宽度', '视口高度']) {
+			assert.equal(await page.getByLabel(label, { exact: true }).inputValue(), '');
+		}
+		assert.equal(
+			await page.getByRole('dialog').locator('input[placeholder="例如：教务系统 A"]').inputValue(),
+			'本地 Fixture'
+		);
+		await page.getByRole('dialog').getByRole('button', { name: '保存配置', exact: true }).click();
+		await page.getByRole('dialog').waitFor({ state: 'hidden' });
+		assert.deepEqual(
+			service.store.read().browsers.find((profile) => profile.id === configuredProfile.id).browserOptions,
+			{}
+		);
+		report('browser parameters reset to defaults from the console');
 
 		await page.click('button.tab:has-text("事件")');
 		await page.locator('.event-row').first().waitFor();

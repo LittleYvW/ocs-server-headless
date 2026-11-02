@@ -54,6 +54,13 @@ export interface AutomationEntry {
 	configs: Record<string, unknown>;
 }
 
+export interface BrowserOptions {
+	locale?: string;
+	timezoneId?: string;
+	userAgent?: string;
+	viewport?: { width: number; height: number };
+}
+
 export interface BrowserProfile {
 	id: string;
 	name: string;
@@ -61,6 +68,7 @@ export interface BrowserProfile {
 	tags?: string[];
 	notes?: string;
 	startUrl: string;
+	browserOptions?: BrowserOptions;
 	automationScripts: AutomationEntry[];
 	userScriptIds: string[];
 	createdAt: string;
@@ -203,6 +211,7 @@ export interface BrowserPayload {
 	tags?: string[];
 	notes?: string;
 	startUrl: string;
+	browserOptions?: BrowserOptions;
 	automationScripts: AutomationEntry[];
 	userScriptIds: string[];
 }
